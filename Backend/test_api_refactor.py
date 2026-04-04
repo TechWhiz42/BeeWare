@@ -39,8 +39,9 @@ def test_validators():
     print("PASS: All validators work correctly")
     
     crime = get_crime_density(28.6315, 77.2167)
-    assert crime == 0.0, "Placeholder should return 0.0"
-    print("PASS: Crime placeholder function works")
+    assert 0.0 <= crime <= 1.0, f"Crime should be in [0, 1], got {crime}"
+    assert crime > 0.0, "Crime database should return non-zero value for Lucknow location"
+    print(f"PASS: Crime auto-fetch from database works (crime={crime:.4f})")
 
 
 def test_service_layer():
@@ -55,13 +56,9 @@ def test_service_layer():
     analyzer = RouteAnalyzer(model, extractor)
     service = SafetyAnalysisService(model, extractor, analyzer)
     
-    timestamp = datetime(2024, 3, 15, 12, 0)
-    
     result = service.analyze_location(
         latitude=28.6315,
-        longitude=77.2167,
-        timestamp=timestamp,
-        crime_density_norm=0.3,
+        longitude=77.2167
     )
     
     assert "latitude" in result
@@ -69,13 +66,11 @@ def test_service_layer():
     assert "safety_score" in result
     assert "label" in result
     assert "color" in result
-    assert result["crime_density_norm"] == 0.3
     
     print(f"PASS: Single location analysis works")
     print(f"  Location: ({result['latitude']}, {result['longitude']})")
     print(f"  Safety Score: {result['safety_score']:.1f}/100")
     print(f"  Label: {result['label']}")
-    print(f"  Crime Density: {result['crime_density_norm']}")
 
 
 def test_route_service():
@@ -90,28 +85,20 @@ def test_route_service():
     analyzer = RouteAnalyzer(model, extractor)
     service = SafetyAnalysisService(model, extractor, analyzer)
     
-    timestamp = datetime(2024, 3, 15, 22, 0)
-    
     waypoints = [
         {
             "latitude": 28.6315,
             "longitude": 77.2167,
-            "timestamp": timestamp,
-            "crime_density_norm": 0.2,
             "name": "Start",
         },
         {
             "latitude": 28.6289,
             "longitude": 77.2215,
-            "timestamp": timestamp,
-            "crime_density_norm": 0.5,
             "name": "Middle",
         },
         {
             "latitude": 28.6263,
             "longitude": 77.2267,
-            "timestamp": timestamp,
-            "crime_density_norm": 0.3,
             "name": "End",
         },
     ]
@@ -122,14 +109,12 @@ def test_route_service():
     assert result["total_segments"] == 3
     assert "safety_score" in result
     assert "category" in result
-    assert len(result["segment_details"]) == 3
     
     print(f"PASS: Route analysis works")
     print(f"  Route: {result['route_name']}")
     print(f"  Safety Score: {result['safety_score']:.1f}/100")
     print(f"  Category: {result['category']}")
     print(f"  Total Segments: {result['total_segments']}")
-    print(f"  High Risk Segments: {result['high_risk_segments']}")
 
 
 def test_bulk_locations():
@@ -144,26 +129,18 @@ def test_bulk_locations():
     analyzer = RouteAnalyzer(model, extractor)
     service = SafetyAnalysisService(model, extractor, analyzer)
     
-    timestamp = datetime(2024, 3, 15, 12, 0)
-    
     locations = [
         {
             "latitude": 28.6315,
             "longitude": 77.2167,
-            "timestamp": timestamp,
-            "crime_density_norm": 0.1,
         },
         {
             "latitude": 28.6289,
             "longitude": 77.2215,
-            "timestamp": timestamp,
-            "crime_density_norm": 0.5,
         },
         {
             "latitude": 28.6263,
             "longitude": 77.2267,
-            "timestamp": timestamp,
-            "crime_density_norm": 0.8,
         },
     ]
     

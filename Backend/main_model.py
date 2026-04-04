@@ -81,9 +81,7 @@ class BeeWareSystem:
         features = self.extractor.extract(
             lat=lat,
             lon=lon,
-            timestamp=timestamp,
             segment_length_m=100.0,
-            crime_density_norm=crime_density_norm,
         )
         
         result = self.model.predict_segment(features)

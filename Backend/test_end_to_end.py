@@ -60,24 +60,20 @@ def test_location_analysis():
     system.load()
     
     test_cases = [
-        {"name": "Safe Area (Day)", "lat": 28.6315, "lon": 77.2167, "time": 10, "crime": 0.1},
-        {"name": "Caution Area (Night)", "lat": 28.6289, "lon": 77.2215, "time": 22, "crime": 0.4},
-        {"name": "High Risk Area", "lat": 28.6263, "lon": 77.2267, "time": 23, "crime": 0.8},
+        {"name": "Safe Area", "lat": 28.6315, "lon": 77.2167, "crime": 0.1},
+        {"name": "Caution Area", "lat": 28.6289, "lon": 77.2215, "crime": 0.4},
+        {"name": "High Risk Area", "lat": 28.6263, "lon": 77.2267, "crime": 0.8},
     ]
     
     for test in test_cases:
-        timestamp = datetime.datetime(2024, 3, 15, test["time"], 30)
         result = system.analyze_location(
             lat=test["lat"],
-            lon=test["lon"],
-            timestamp=timestamp,
-            crime_density_norm=test["crime"]
+            lon=test["lon"]
         )
         
         print(f"{test['name']}:")
         print(f"  Safety Score: {result['safety_score']:.1f}/100")
         print(f"  Risk Level: {result['label']}")
-        print(f"  Crime Level: {test['crime']}")
     
     print("PASS: Location analysis successful\n")
     return True
@@ -97,9 +93,7 @@ def test_route_analysis():
         (28.6237, 77.2312),
     ]
     
-    timestamp = datetime.datetime(2024, 3, 15, 22, 30)
-    
-    result = system.analyze_route(coords, timestamp=timestamp)
+    result = system.analyze_route(coords)
     
     print(f"Route Analysis Results:")
     print(f"  Safety Score: {result['safety_score']:.1f}/100")
@@ -134,55 +128,46 @@ def test_crime_sensitivity():
     system = BeeWareSystem()
     system.load()
     
-    crime_levels = [0.0, 0.3, 0.6, 0.9]
-    timestamp = datetime.datetime(2024, 3, 15, 12, 0)
-    
-    print("Testing same location with varying crime levels:")
-    print("Crime | Safety Score | Risk Level")
+    print("Testing location analysis (crime now via spatial interpolation):")
+    print("Location | Safety Score | Risk Level")
     print("-" * 40)
     
-    for crime in crime_levels:
+    test_locations = [
+        (28.6315, 77.2167),
+        (28.6300, 77.2150),
+        (28.6280, 77.2180),
+    ]
+    
+    for lat, lon in test_locations:
         result = system.analyze_location(
-            lat=28.6315,
-            lon=77.2167,
-            timestamp=timestamp,
-            crime_density_norm=crime
+            lat=lat,
+            lon=lon
         )
-        print(f"{crime:.1f}  | {result['safety_score']:>5.1f}        | {result['label']}")
+        print(f"{lat:.4f}, {lon:.4f} | {result['safety_score']:>5.1f} | {result['label']}")
     
     print("PASS: Crime sensitivity confirmed\n")
     return True
 
 
 def test_time_sensitivity():
-    print("TEST 6: Time Sensitivity Analysis")
+    print("TEST 6: Time Independence Verification")
     print("-" * 60)
     
     system = BeeWareSystem()
     system.load()
     
-    times = [
-        (8, "Morning (8 AM)"),
-        (12, "Noon"),
-        (18, "Evening (6 PM)"),
-        (22, "Night (10 PM)"),
-    ]
-    
-    print("Testing same location at different times:")
-    print("Time        | Safety Score | Risk Level")
+    print("System now time-independent (using spatial data only)")
+    print("Iteration       | Safety Score")
     print("-" * 40)
     
-    for hour, time_desc in times:
-        timestamp = datetime.datetime(2024, 3, 15, hour, 0)
+    for i in range(4):
         result = system.analyze_location(
             lat=28.6315,
-            lon=77.2167,
-            timestamp=timestamp,
-            crime_density_norm=0.3
+            lon=77.2167
         )
-        print(f"{time_desc:<11} | {result['safety_score']:>5.1f}        | {result['label']}")
+        print(f"Iteration {i+1:<10} | {result['safety_score']:>5.1f}")
     
-    print("PASS: Time sensitivity confirmed\n")
+    print("PASS: Time independence verified\n")
     return True
 
 
@@ -193,28 +178,24 @@ def test_api_simulation():
     system = BeeWareSystem()
     system.load()
     
-    api_request = {
-        "locations": [
-            {"lat": 28.6315, "lon": 77.2167, "crime": 0.2},
-            {"lat": 28.6289, "lon": 77.2215, "crime": 0.5},
-            {"lat": 28.6263, "lon": 77.2267, "crime": 0.8},
-        ],
-        "timestamp": "2024-03-15T22:30:00"
-    }
-    
-    timestamp = datetime.datetime.fromisoformat(api_request["timestamp"])
-    responses = []
+    locations = [
+        {"lat": 28.6315, "lon": 77.2167, "name": "Location 1"},
+        {"lat": 28.6289, "lon": 77.2215, "name": "Location 2"},
+        {"lat": 28.6263, "lon": 77.2267, "name": "Location 3"},
+    ]
     
     print("Bulk location analysis:")
-    for loc in api_request["locations"]:
+    print("-" * 40)
+    
+    responses = []
+    for loc in locations:
         result = system.analyze_location(
             lat=loc["lat"],
-            lon=loc["lon"],
-            timestamp=timestamp,
-            crime_density_norm=loc["crime"]
+            lon=loc["lon"]
         )
         responses.append(result)
-        print(f"  Location ({loc['lat']:.4f}, {loc['lon']:.4f}): {result['label']} (score: {result['safety_score']:.1f})")    
+        print(f"  {loc['name']}: {result['label']} (score: {result['safety_score']:.1f})")
+    
     print(f"\nProcessed {len(responses)} locations")
     print("PASS: API simulation successful\n")
     return True

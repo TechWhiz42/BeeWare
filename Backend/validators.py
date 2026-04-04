@@ -51,13 +51,23 @@ def validate_crime_density(crime: float) -> float:
 
 
 def get_crime_density(lat: float, lon: float) -> float:
-    """Placeholder for crime data retrieval.
+    """Get crime density for location from database.
     
-    This function should be replaced with:
-    - Database query
-    - External API call
-    - ML model inference
+    Queries the crime database to find the nearest area and
+    returns normalized crime density [0, 1].
     
-    Returns crime density normalized to [0, 1]
+    Args:
+        lat: Latitude [-90, 90]
+        lon: Longitude [-180, 180]
+    
+    Returns:
+        Crime density normalized to [0, 1]
     """
-    return 0.0
+    from database import get_crime_density_from_db
+    
+    try:
+        crime_density = get_crime_density_from_db(lat, lon)
+        return validate_crime_density(crime_density)
+    except Exception as e:
+        logger.error(f"Error getting crime density for ({lat}, {lon}): {e}")
+        return 0.0

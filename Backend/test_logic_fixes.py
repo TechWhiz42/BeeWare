@@ -64,20 +64,26 @@ def test_crime_dominant_formula():
     p_high_risk = result["probability_high_risk"]
     crime = result["crime_density_norm"]
     
-    base_risk = (p_caution * 0.4) + (p_high_risk * 1.0)
-    crime_penalty = crime * 0.6
-    final_risk = min(1.0, base_risk + crime_penalty)
-    expected_score = (1.0 - final_risk) * 100
+    # NEW FORMULA (refactored to avoid double-counting crime)
+    is_night = features[2]  # Extract from feature vector
+    isolation_score = features[5]
+    
+    model_risk = (0.25 * p_caution) + (0.85 * p_high_risk)
+    crime_effect = crime ** 1.4
+    context_boost = (0.1 * is_night) + (0.05 * isolation_score)
+    final_risk = 1 - (1 - model_risk) * (1 - crime_effect)
+    final_risk = min(1.0, final_risk + context_boost)
+    expected_score = 100 * (1 - (final_risk ** 0.85))
     
     actual_score = result["safety_score"]
     
     assert abs(actual_score - expected_score) < 0.01, \
         f"Formula mismatch: expected {expected_score:.2f}, got {actual_score:.2f}"
     
-    print(f"PASS: Safety score formula verified")
+    print(f"PASS: Safety score formula verified (refactored, no double-counting)")
     print(f"  P(safe)={p_safe:.3f}, P(caution)={p_caution:.3f}, P(high_risk)={p_high_risk:.3f}")
-    print(f"  Base risk: {base_risk:.3f}")
-    print(f"  Crime penalty: {crime_penalty:.3f}")
+    print(f"  Model risk: {model_risk:.3f}")
+    print(f"  Crime effect: {crime_effect:.3f}")
     print(f"  Final risk: {final_risk:.3f}")
     print(f"  Safety score: {actual_score:.1f}/100")
 

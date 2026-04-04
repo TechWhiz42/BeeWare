@@ -12,7 +12,7 @@ from route_analyzer import RouteAnalyzer
 from service import SafetyAnalysisService
 from validators import (
     validate_latitude, validate_longitude, validate_crime_density,
-    ValidationError
+    ValidationError, get_crime_density
 )
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,6 @@ class LocationRequest(BaseModel):
     latitude: Annotated[float, Field(..., ge=-90, le=90, description="Latitude [-90, 90]")]
     longitude: Annotated[float, Field(..., ge=-180, le=180, description="Longitude [-180, 180]")]
     timestamp: Annotated[datetime, Field(..., description="Time for assessment")]
-    crime_density_norm: Annotated[float, Field(..., ge=0, le=1, description="Crime density [0, 1]")]
     
     @validator("latitude")
     def validate_lat(cls, v):
@@ -61,17 +60,12 @@ class LocationRequest(BaseModel):
     @validator("longitude")
     def validate_lon(cls, v):
         return validate_longitude(v)
-    
-    @validator("crime_density_norm")
-    def validate_crime(cls, v):
-        return validate_crime_density(v)
 
 
 class WaypointRequest(BaseModel):
     latitude: Annotated[float, Field(..., ge=-90, le=90, description="Latitude [-90, 90]")]
     longitude: Annotated[float, Field(..., ge=-180, le=180, description="Longitude [-180, 180]")]
     timestamp: Annotated[datetime, Field(..., description="Time for assessment")]
-    crime_density_norm: Annotated[float, Field(..., ge=0, le=1, description="Crime density [0, 1]")]
     name: Optional[str] = Field(None, description="Waypoint name/identifier")
     
     @validator("latitude")
@@ -81,10 +75,6 @@ class WaypointRequest(BaseModel):
     @validator("longitude")
     def validate_lon(cls, v):
         return validate_longitude(v)
-    
-    @validator("crime_density_norm")
-    def validate_crime(cls, v):
-        return validate_crime_density(v)
 
 
 class RouteRequest(BaseModel):
@@ -102,7 +92,11 @@ class LocationResponse(BaseModel):
     probability_caution: float
     probability_high_risk: float
     crime_density_norm: float
-    timestamp: str
+    crime_density: Optional[float] = None
+    timestamp: Optional[str] = None
+    time_features: Optional[dict] = None
+    confidence: Optional[float] = None
+    explanation: Optional[List[str]] = None
 
 
 class BulkLocationRequest(BaseModel):
@@ -165,7 +159,8 @@ def analyze_location_safety(request: LocationRequest):
     - latitude: float [-90, 90]
     - longitude: float [-180, 180]
     - timestamp: datetime
-    - crime_density_norm: float [0, 1]
+    
+    Crime density is automatically fetched from database.
     """
     if not model.is_trained:
         raise HTTPException(
@@ -174,11 +169,13 @@ def analyze_location_safety(request: LocationRequest):
         )
     
     try:
+        crime = get_crime_density(request.latitude, request.longitude)
+        
         result = service.analyze_location(
             latitude=request.latitude,
             longitude=request.longitude,
             timestamp=request.timestamp,
-            crime_density_norm=request.crime_density_norm,
+            crime_density_norm=crime,
         )
         return LocationResponse(**result)
     except ValidationError as e:
@@ -196,8 +193,9 @@ def analyze_route_safety(request: RouteRequest):
     - latitude: float [-90, 90]
     - longitude: float [-180, 180]
     - timestamp: datetime
-    - crime_density_norm: float [0, 1]
     - name: optional str
+    
+    Crime density is automatically fetched per waypoint.
     """
     if not model.is_trained:
         raise HTTPException(
@@ -206,20 +204,22 @@ def analyze_route_safety(request: RouteRequest):
         )
     
     try:
-        waypoints_data = [
-            {
+        waypoints_data = []
+        for wp in request.waypoints:
+            crime = get_crime_density(wp.latitude, wp.longitude)
+            
+            waypoints_data.append({
                 "latitude": wp.latitude,
                 "longitude": wp.longitude,
                 "timestamp": wp.timestamp,
-                "crime_density_norm": wp.crime_density_norm,
+                "crime_density_norm": crime,
                 "name": wp.name,
-            }
-            for wp in request.waypoints
-        ]
+            })
         
         result = service.analyze_route(
             waypoints=waypoints_data,
             route_name=request.route_name,
+            timestamp=request.waypoints[0].timestamp if request.waypoints else None,
         )
         return RouteResponse(**result)
     except ValidationError as e:
@@ -239,7 +239,8 @@ def analyze_multiple_locations(request: BulkLocationRequest):
     - latitude: float [-90, 90]
     - longitude: float [-180, 180]
     - timestamp: datetime
-    - crime_density_norm: float [0, 1]
+    
+    Crime density is automatically fetched per location.
     """
     if not model.is_trained:
         raise HTTPException(
@@ -248,15 +249,16 @@ def analyze_multiple_locations(request: BulkLocationRequest):
         )
     
     try:
-        locations_data = [
-            {
+        locations_data = []
+        for loc in request.locations:
+            crime = get_crime_density(loc.latitude, loc.longitude)
+            
+            locations_data.append({
                 "latitude": loc.latitude,
                 "longitude": loc.longitude,
                 "timestamp": loc.timestamp,
-                "crime_density_norm": loc.crime_density_norm,
-            }
-            for loc in request.locations
-        ]
+                "crime_density_norm": crime,
+            })
         
         result = service.analyze_multiple_locations(locations_data)
         
