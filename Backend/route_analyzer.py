@@ -8,7 +8,6 @@ from typing import Optional
 class RouteSegment:
     lat: float
     lon: float
-    road_type: str = "residential"
     length_m: float = 100.0
     name: str = ""
 
@@ -27,6 +26,7 @@ class RouteAnalysis:
     recommendations: list
     high_risk_segments: list
     segment_scores: list
+    segment_explanations: list
     processing_time_ms: float = 0.0
     model_metrics: dict = field(default_factory=dict)
 
@@ -39,16 +39,11 @@ class RouteAnalysis:
             "recommendations": self.recommendations,
             "high_risk_segments": self.high_risk_segments,
             "segment_scores": self.segment_scores,
+            "segment_explanations": self.segment_explanations,
             "timestamp": self.timestamp.isoformat(),
             "processing_time_ms": self.processing_time_ms,
         }
 
-
-CATEGORY_THRESHOLDS = {
-    (70, 100): ("Safe", "#22c55e", ""),
-    (45, 70): ("Caution", "#f59e0b", ""),
-    (0, 45): ("Avoid", "#ef4444", ""),
-}
 
 RECOMMENDATIONS = {
     "Safe": [
@@ -74,34 +69,6 @@ RECOMMENDATIONS = {
 }
 
 
-def aggregate_segment_recommendations(segments: list) -> list[str]:
-    avoid_recs = set()
-    caution_recs = set()
-    safe_recs = set()
-    
-    for seg in segments:
-        if seg.risk_result:
-            label = seg.risk_result["label"]
-            recs = seg.risk_result.get("recommendations", [])
-            
-            if label == "High Risk":
-                avoid_recs.update(recs)
-            elif label == "Caution":
-                caution_recs.update(recs)
-            else:
-                safe_recs.update(recs)
-    
-    combined = []
-    if avoid_recs:
-        combined.extend(sorted(list(avoid_recs)))
-    if caution_recs:
-        combined.extend(sorted(list(caution_recs)))
-    if safe_recs:
-        combined.extend(sorted(list(safe_recs)))
-    
-    return combined
-
-
 class RouteAnalyzer:
     def __init__(self, model, feature_extractor):
         self.model = model
@@ -109,6 +76,7 @@ class RouteAnalyzer:
 
     def analyze_route(self, segments: list[RouteSegment],
                       timestamp: Optional[datetime.datetime] = None) -> RouteAnalysis:
+        """Analyze route and return safety assessment."""
         import time
         t0 = time.perf_counter()
 
@@ -118,20 +86,25 @@ class RouteAnalyzer:
         segment_results = []
         segment_scores = []
         high_risk_segments = []
-        all_explanations = []
+        segment_explanations = []
 
         for i, seg in enumerate(segments):
+            crime_density = 0.0
+            
             seg.features = self.extractor.extract(
                 lat=seg.lat,
                 lon=seg.lon,
                 timestamp=timestamp,
-                road_type=seg.road_type,
                 segment_length_m=seg.length_m,
+                crime_density_norm=crime_density,
             )
 
             seg.risk_result = self.model.predict_segment(seg.features)
             score = seg.risk_result["safety_score"]
             segment_scores.append(score)
+            risk_class = seg.risk_result["risk_class"]
+            
+            explanation = self._build_segment_explanation(seg.risk_result, i)
 
             seg_info = {
                 "index": i,
@@ -141,40 +114,29 @@ class RouteAnalyzer:
                 "safety_score": score,
                 "label": seg.risk_result["label"],
                 "color": seg.risk_result["color"],
+                "explanation": explanation,
             }
             segment_results.append(seg_info)
+            segment_explanations.append(explanation)
 
-            if seg.risk_result["risk_class"] == 2:
+            if risk_class == 2:
                 high_risk_segments.append(seg_info)
-                all_explanations.extend(seg.risk_result["explanation"][:2])
-
-        arr = np.array(segment_scores)
-        p10 = float(np.percentile(arr, 10))
-        p25 = float(np.percentile(arr, 25))
-        mean = float(np.mean(arr))
-
-        final_score = round(0.40 * mean + 0.35 * p25 + 0.25 * p10, 1)
-        final_score = max(0.0, min(100.0, final_score))
-
-        category, color, _ = "Caution", "#f59e0b", ""
-        for (lo, hi), (cat, col, _) in CATEGORY_THRESHOLDS.items():
-            if lo <= final_score <= hi:
-                category, color = cat, col
-                break
 
         n_high = len(high_risk_segments)
         n_total = len(segments)
-        pct_risk = round(100 * n_high / max(n_total, 1), 0)
-
-        time_label = _time_label(timestamp)
-        summary = (
-            f"{category} route | Score: {final_score}/100 | "
-            f"{n_high}/{n_total} high-risk segments ({pct_risk}%) | "
-            f"Analyzed for {time_label}"
+        
+        final_score, category, color = self._aggregate_route_score(
+            segment_scores, n_high, n_total
         )
 
-        unique_explanations = list(dict.fromkeys(all_explanations))[:6]
-        route_recommendations = aggregate_segment_recommendations(segments)
+        pct_high = round(100 * n_high / max(n_total, 1), 1)
+
+        time_label = self._time_label(timestamp)
+        summary = (
+            f"{category} | Score: {final_score}/100 | "
+            f"{n_high}/{n_total} high-risk segments ({pct_high}%) | {time_label}"
+        )
+
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
         return RouteAnalysis(
@@ -184,24 +146,24 @@ class RouteAnalyzer:
             category=category,
             color=color,
             summary=summary,
-            recommendations=route_recommendations if route_recommendations else RECOMMENDATIONS[category],
+            recommendations=RECOMMENDATIONS[category],
             high_risk_segments=high_risk_segments,
             segment_scores=segment_scores,
+            segment_explanations=segment_explanations,
             processing_time_ms=elapsed_ms,
             model_metrics=self.model.training_metrics,
         )
 
+
     def analyze_coordinates(self,
                              coords: list[tuple[float, float]],
-                             road_types: Optional[list[str]] = None,
                              timestamp: Optional[datetime.datetime] = None) -> RouteAnalysis:
-        if road_types is None:
-            road_types = ["residential"] * len(coords)
-
+        """Analyze route from list of coordinates."""
+        from feature_extractor import haversine_km
+        
         segments = []
-        for i, ((lat, lon), rtype) in enumerate(zip(coords, road_types)):
+        for i, (lat, lon) in enumerate(coords):
             if i > 0:
-                from feature_extractor import haversine_km
                 length_m = haversine_km(
                     coords[i-1][0], coords[i-1][1], lat, lon
                 ) * 1000
@@ -211,23 +173,90 @@ class RouteAnalyzer:
             segments.append(RouteSegment(
                 lat=lat,
                 lon=lon,
-                road_type=rtype,
                 length_m=length_m,
                 name=f"Point {i+1}"
             ))
 
         return self.analyze_route(segments, timestamp=timestamp)
 
+    def _aggregate_route_score(self, segment_scores: list, n_high: int, n_total: int) -> tuple:
+        """Aggregate segment scores with strict risk penalties."""
+        arr = np.array(segment_scores)
+        
+        min_score = float(np.min(arr))
+        p10 = float(np.percentile(arr, 10))
+        p25 = float(np.percentile(arr, 25))
+        mean = float(np.mean(arr))
+        
+        high_risk_penalty = (n_high / max(n_total, 1)) * 60
+        worst_segment_penalty = (100 - min_score) * 0.5
+        
+        final_score = round(
+            0.35 * mean +
+            0.30 * p25 +
+            0.20 * p10 +
+            0.15 * min_score -
+            high_risk_penalty -
+            worst_segment_penalty,
+            1
+        )
+        
+        final_score = max(0.0, min(100.0, final_score))
+        
+        if n_high > 0:
+            category = "Avoid"
+            color = "#ef4444"
+        elif final_score >= 70:
+            category = "Safe"
+            color = "#22c55e"
+        elif final_score >= 45:
+            category = "Caution"
+            color = "#f59e0b"
+        else:
+            category = "Avoid"
+            color = "#ef4444"
+        
+        return final_score, category, color
 
-def _time_label(dt: datetime.datetime) -> str:
-    hour = dt.hour
-    if 5 <= hour < 12:
-        period = "morning"
-    elif 12 <= hour < 17:
-        period = "afternoon"
-    elif 17 <= hour < 20:
-        period = "evening"
-    else:
-        period = "night"
+    def _build_segment_explanation(self, risk_result: dict, index: int) -> str:
+        """Build human-readable explanation for segment risk."""
+        crime_density = risk_result.get("crime_density_norm", 0)
+        prob_high_risk = risk_result.get("probability_high_risk", 0)
+        label = risk_result["label"]
+        
+        reasons = []
+        
+        if crime_density > 0.7:
+            reasons.append("high crime area")
+        elif crime_density > 0.5:
+            reasons.append("elevated crime risk")
+        
+        if label == "High Risk":
+            if prob_high_risk > 0.8:
+                reasons.append("high risk classification")
+            
+            if crime_density > 0.6:
+                reasons.append("dangerous area")
+        elif label == "Caution":
+            reasons.append("caution advised")
+        
+        if not reasons:
+            reasons.append("standard conditions")
+        
+        explanation = f"Segment {index+1}: {', '.join(reasons)}"
+        return explanation
 
-    return f"{dt.strftime('%H:%M')} ({period})"
+    @staticmethod
+    def _time_label(dt: datetime.datetime) -> str:
+        """Generate time period label."""
+        hour = dt.hour
+        if 5 <= hour < 12:
+            period = "morning"
+        elif 12 <= hour < 17:
+            period = "afternoon"
+        elif 17 <= hour < 20:
+            period = "evening"
+        else:
+            period = "night"
+
+        return f"{dt.strftime('%H:%M')} ({period})"

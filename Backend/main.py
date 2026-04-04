@@ -1,67 +1,37 @@
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 from typing import Annotated, Optional, List
 from fastapi.middleware.cors import CORSMiddleware
 from datetime import datetime
 from contextlib import asynccontextmanager
 import logging
-import os
 
 from risk_model import BeeWareRiskModel
 from feature_extractor import FeatureExtractor
-from route_analyzer import RouteAnalyzer, RouteSegment
-from crime_data_handler import CrimeDataHandler
-from database import db
+from route_analyzer import RouteAnalyzer
+from service import SafetyAnalysisService
+from validators import (
+    validate_latitude, validate_longitude, validate_crime_density,
+    ValidationError
+)
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 model = BeeWareRiskModel()
-crime_handler = CrimeDataHandler()
-extractor = FeatureExtractor(crime_handler=crime_handler)
+extractor = FeatureExtractor()
 analyzer = RouteAnalyzer(model, extractor)
+service = SafetyAnalysisService(model, extractor, analyzer)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load model, crime data, and database on startup, cleanup on shutdown."""
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        logger.info("Environment variables loaded")
-    except ImportError:
-        logger.warning("python-dotenv not installed. Using default environment variables.")
-    
-    logger.info("Connecting to database...")
-    try:
-        db.connect()
-        logger.info("Database connected successfully")
-    except Exception as e:
-        logger.error(f"Database connection failed: {e}")
-    
-    logger.info("Loading model...")
+    """Startup and shutdown lifecycle."""
     try:
         model.load("beeware_model.pkl")
-        logger.info("Model loaded successfully")
     except Exception as e:
         logger.warning(f"Could not load model: {e}")
     
-    logger.info("Loading crime data from database...")
-    try:
-        crime_handler.load_from_database()
-        logger.info("Crime data loaded successfully")
-    except Exception as e:
-        logger.warning(f"Could not load crime data: {e}")
-    
     yield
-    
-    logger.info("Disconnecting from database...")
-    try:
-        db.disconnect()
-        logger.info("Database disconnected")
-    except Exception as e:
-        logger.warning(f"Error disconnecting database: {e}")
-    
-    logger.info("Shutting down system...")
 
 
 app = FastAPI(
@@ -77,30 +47,75 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-class Location(BaseModel):
-    latitude: Annotated[float, Field(..., description="Latitude coordinate")]
-    longitude: Annotated[float, Field(..., description="Longitude coordinate")]
-    timestamp: Annotated[datetime, Field(..., description="Time for safety assessment")]
-    city: Optional[str] = Field(None, description="City name for crime data lookup")
-    area: Optional[str] = Field(None, description="Area name for crime data lookup")
 
-
-class RoutePoint(BaseModel):
-    latitude: float
-    longitude: float
-    name: Optional[str] = None
-    timestamp: Annotated[datetime, Field(..., description="Time for safety assessment")]
-    city: Optional[str] = Field(None, description="City name for crime data lookup")
-    area: Optional[str] = Field(None, description="Area name for crime data lookup")
+class LocationRequest(BaseModel):
+    latitude: Annotated[float, Field(..., ge=-90, le=90, description="Latitude [-90, 90]")]
+    longitude: Annotated[float, Field(..., ge=-180, le=180, description="Longitude [-180, 180]")]
+    timestamp: Annotated[datetime, Field(..., description="Time for assessment")]
+    crime_density_norm: Annotated[float, Field(..., ge=0, le=1, description="Crime density [0, 1]")]
     
+    @validator("latitude")
+    def validate_lat(cls, v):
+        return validate_latitude(v)
+    
+    @validator("longitude")
+    def validate_lon(cls, v):
+        return validate_longitude(v)
+    
+    @validator("crime_density_norm")
+    def validate_crime(cls, v):
+        return validate_crime_density(v)
+
+
+class WaypointRequest(BaseModel):
+    latitude: Annotated[float, Field(..., ge=-90, le=90, description="Latitude [-90, 90]")]
+    longitude: Annotated[float, Field(..., ge=-180, le=180, description="Longitude [-180, 180]")]
+    timestamp: Annotated[datetime, Field(..., description="Time for assessment")]
+    crime_density_norm: Annotated[float, Field(..., ge=0, le=1, description="Crime density [0, 1]")]
+    name: Optional[str] = Field(None, description="Waypoint name/identifier")
+    
+    @validator("latitude")
+    def validate_lat(cls, v):
+        return validate_latitude(v)
+    
+    @validator("longitude")
+    def validate_lon(cls, v):
+        return validate_longitude(v)
+    
+    @validator("crime_density_norm")
+    def validate_crime(cls, v):
+        return validate_crime_density(v)
 
 
 class RouteRequest(BaseModel):
-    waypoints: List[RoutePoint] = Field(..., description="List of route waypoints")
-    route_name: Optional[str] = Field("Route", description="Route identifier/name")
+    waypoints: List[WaypointRequest] = Field(..., min_items=2, description="Route waypoints (min 2)")
+    route_name: Optional[str] = Field("Route", description="Route name/identifier")
 
 
-class SegmentRiskResult(BaseModel):
+class LocationResponse(BaseModel):
+    latitude: float
+    longitude: float
+    safety_score: float
+    label: str
+    color: str
+    probability_safe: float
+    probability_caution: float
+    probability_high_risk: float
+    crime_density_norm: float
+    timestamp: str
+
+
+class BulkLocationRequest(BaseModel):
+    locations: List[LocationRequest] = Field(..., min_items=1, description="Locations to analyze")
+
+
+class BulkLocationResponse(BaseModel):
+    count: int
+    results: List[LocationResponse]
+    high_risk_count: int
+
+
+class SegmentDetail(BaseModel):
     index: int
     name: str
     latitude: float
@@ -108,66 +123,49 @@ class SegmentRiskResult(BaseModel):
     safety_score: float
     label: str
     color: str
-    risk_class: Optional[int] = None
+    explanation: str
 
 
-class SafetyRecommendation(BaseModel):
-    text: str
-    priority: Optional[str] = None
-
-
-class LocationSafetyResponse(BaseModel):
-    location_name: str
-    latitude: float
-    longitude: float
-    safety_score: float
-    category: str
-    color: str
-    timestamp: datetime
-    recommendations: List[str]
-    explanation: List[str]
-    details: Optional[dict] = None
-
-
-class RouteSafetyResponse(BaseModel):
-    """Response for route safety assessment."""
+class RouteResponse(BaseModel):
     route_name: str
     safety_score: float
     category: str
     color: str
     summary: str
-    timestamp: datetime
+    timestamp: str
     total_segments: int
     high_risk_segments: int
     high_risk_percentage: float
-    segment_details: List[SegmentRiskResult]
+    segment_details: List[SegmentDetail]
     recommendations: List[str]
     processing_time_ms: float
 
 
-class BulkLocationRequest(BaseModel):
-    """Request to analyze multiple locations."""
-    locations: List[Location]
-    timestamp: Optional[datetime] = None
+class ErrorResponse(BaseModel):
+    error: str
+    detail: str
+    status_code: int
 
 
-class BulkLocationResponse(BaseModel):
-    """Response for bulk location analysis."""
-    count: int
-    results: List[LocationSafetyResponse]
-    high_risk_count: int
+@app.get("/health")
+def health_check():
+    """Check API health and model status."""
+    return {
+        "status": "healthy",
+        "model_trained": model.is_trained,
+        "model_metrics": model.training_metrics if model.is_trained else None
+    }
 
 
-
-
-@app.post("/location/safety", response_model=LocationSafetyResponse)
-def analyze_location_safety(location: Location):
-    """
-    Analyze safety of a single location.
+@app.post("/location/safety", response_model=LocationResponse)
+def analyze_location_safety(request: LocationRequest):
+    """Analyze safety of a single location.
     
-    - latitude: Latitude coordinate
-    - longitude: Longitude coordinate
-    - timestamp: Time for safety assessment
+    Required input:
+    - latitude: float [-90, 90]
+    - longitude: float [-180, 180]
+    - timestamp: datetime
+    - crime_density_norm: float [0, 1]
     """
     if not model.is_trained:
         raise HTTPException(
@@ -176,42 +174,30 @@ def analyze_location_safety(location: Location):
         )
     
     try:
-        features = extractor.extract(
-            lat=location.latitude,
-            lon=location.longitude,
-            timestamp=location.timestamp,
-            segment_length_m=100,
-            city=location.city,
-            area=location.area
+        result = service.analyze_location(
+            latitude=request.latitude,
+            longitude=request.longitude,
+            timestamp=request.timestamp,
+            crime_density_norm=request.crime_density_norm,
         )
-        
-        risk_result = model.predict_segment(features)
-        location_name = f"{location.latitude:.4f}, {location.longitude:.4f}"
-        
-        return LocationSafetyResponse(
-            location_name=location_name,
-            latitude=location.latitude,
-            longitude=location.longitude,
-            safety_score=risk_result["safety_score"],
-            category=risk_result["label"],
-            color=risk_result["color"],
-            timestamp=location.timestamp,
-            recommendations=risk_result.get("recommendations", []),
-            explanation=risk_result.get("explanation", []),
-            details=risk_result
-        )
+        return LocationResponse(**result)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error analyzing location: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Location analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.post("/route/safety", response_model=RouteSafetyResponse)
-def analyze_route_safety(route_req: RouteRequest):
-    """
-    Analyze safety of a complete route.
+@app.post("/route/safety", response_model=RouteResponse)
+def analyze_route_safety(request: RouteRequest):
+    """Analyze safety of a complete route.
     
-    Requires a list of waypoints (at least 2).
-    Returns aggregated safety assessment with segment-level details.
+    Each waypoint must include:
+    - latitude: float [-90, 90]
+    - longitude: float [-180, 180]
+    - timestamp: datetime
+    - crime_density_norm: float [0, 1]
+    - name: optional str
     """
     if not model.is_trained:
         raise HTTPException(
@@ -219,64 +205,41 @@ def analyze_route_safety(route_req: RouteRequest):
             detail="Model not trained. Call /admin/train first."
         )
     
-    if len(route_req.waypoints) < 2:
-        raise HTTPException(
-            status_code=400,
-            detail="Route must have at least 2 waypoints"
-        )
-    
     try:
-        coords = [(wp.latitude, wp.longitude) for wp in route_req.waypoints]
-        timestamp = route_req.waypoints[0].timestamp if route_req.waypoints else datetime.now()
-        
-        analysis = analyzer.analyze_coordinates(
-            coords=coords,
-            timestamp=timestamp
-        )
-        
-        segment_details = [
-            SegmentRiskResult(
-                index=seg["index"],
-                name=seg["name"],
-                latitude=seg["lat"],
-                longitude=seg["lon"],
-                safety_score=seg["safety_score"],
-                label=seg["label"],
-                color=seg["color"]
-            )
-            for seg in analysis.segments
+        waypoints_data = [
+            {
+                "latitude": wp.latitude,
+                "longitude": wp.longitude,
+                "timestamp": wp.timestamp,
+                "crime_density_norm": wp.crime_density_norm,
+                "name": wp.name,
+            }
+            for wp in request.waypoints
         ]
         
-        high_risk_pct = (
-            100 * len(analysis.high_risk_segments) / len(analysis.segments)
-            if analysis.segments else 0
+        result = service.analyze_route(
+            waypoints=waypoints_data,
+            route_name=request.route_name,
         )
-        
-        return RouteSafetyResponse(
-            route_name=route_req.route_name or "Custom Route",
-            safety_score=analysis.safety_score,
-            category=analysis.category,
-            color=analysis.color,
-            summary=analysis.summary,
-            timestamp=timestamp,
-            total_segments=len(analysis.segments),
-            high_risk_segments=len(analysis.high_risk_segments),
-            high_risk_percentage=high_risk_pct,
-            segment_details=segment_details,
-            recommendations=analysis.recommendations,
-            processing_time_ms=analysis.processing_time_ms
-        )
+        return RouteResponse(**result)
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error analyzing route: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Route analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/locations/safety/bulk", response_model=BulkLocationResponse)
 def analyze_multiple_locations(request: BulkLocationRequest):
-    """
-    Analyze safety of multiple locations in bulk.
+    """Analyze safety of multiple locations in bulk.
     
-    Useful for analyzing a grid of locations or comparing multiple destinations.
+    Each location must include:
+    - latitude: float [-90, 90]
+    - longitude: float [-180, 180]
+    - timestamp: datetime
+    - crime_density_norm: float [0, 1]
     """
     if not model.is_trained:
         raise HTTPException(
@@ -284,84 +247,77 @@ def analyze_multiple_locations(request: BulkLocationRequest):
             detail="Model not trained. Call /admin/train first."
         )
     
-    results = []
-    high_risk_count = 0
-    
     try:
-        for location in request.locations:
-            features = extractor.extract(
-                lat=location.latitude,
-                lon=location.longitude,
-                timestamp=location.timestamp,
-                segment_length_m=100,
-                city=location.city,
-                area=location.area
-            )
-            
-            risk_result = model.predict_segment(features)
-            location_name = f"{location.latitude:.4f}, {location.longitude:.4f}"
-            
-            response = LocationSafetyResponse(
-                location_name=location_name,
-                latitude=location.latitude,
-                longitude=location.longitude,
-                safety_score=risk_result["safety_score"],
-                category=risk_result["label"],
-                color=risk_result["color"],
-                timestamp=location.timestamp,
-                recommendations=risk_result.get("recommendations", []),
-                explanation=risk_result.get("explanation", []),
-                details=risk_result
-            )
-            results.append(response)
-            
-            if risk_result["label"] == "Avoid":
-                high_risk_count += 1
+        locations_data = [
+            {
+                "latitude": loc.latitude,
+                "longitude": loc.longitude,
+                "timestamp": loc.timestamp,
+                "crime_density_norm": loc.crime_density_norm,
+            }
+            for loc in request.locations
+        ]
+        
+        result = service.analyze_multiple_locations(locations_data)
         
         return BulkLocationResponse(
-            count=len(results),
-            results=results,
-            high_risk_count=high_risk_count
+            count=result["count"],
+            results=[LocationResponse(**r) for r in result["results"]],
+            high_risk_count=result["high_risk_count"],
         )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Error in bulk analysis: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Bulk analysis error: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 
 @app.post("/admin/train")
-def train_model(n_samples: int = Query(50000, description="Training samples")):
-    """Train the ML model."""
+def train_model(csv_path: str = Query(..., description="Path to CSV dataset")):
+    """Train the ML model from CSV dataset.
+    
+    CSV must contain all 11 required features and a label column.
+    All values must be normalized to [0, 1].
+    """
+    if not csv_path:
+        raise HTTPException(status_code=400, detail="csv_path is required")
+    
     try:
-        logger.info(f"Starting model training with {n_samples} samples...")
-        model.train(n_samples=n_samples, save=True)
-        logger.info("Model training complete")
+        model.train_from_csv(csv_path)
+        model.save("beeware_model.pkl")
         
         return {
             "status": "success",
             "message": "Model trained and saved",
-            "samples": n_samples,
-            "model_path": "beeware_model.pkl"
+            "csv_path": csv_path,
+            "metrics": model.training_metrics
         }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"CSV file not found: {csv_path}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Training failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Training failed")
 
 
 @app.post("/admin/reload")
 def reload_model():
     """Reload the model from disk."""
     try:
-        logger.info("Reloading model...")
         model.load("beeware_model.pkl")
-        logger.info("Model reloaded successfully")
         
         return {
             "status": "success",
             "message": "Model reloaded successfully",
-            "is_trained": model.is_trained
+            "is_trained": model.is_trained,
+            "metrics": model.training_metrics
         }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Model file not found")
     except Exception as e:
         logger.error(f"Reload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Reload failed")
 
 
 @app.get("/admin/model-info")
@@ -370,95 +326,5 @@ def get_model_info():
     return {
         "is_trained": model.is_trained,
         "model_path": "beeware_model.pkl",
-        "feature_extractor": "live_api_disabled",
-        "training_metrics": getattr(model, "training_metrics", {})
+        "metrics": model.training_metrics if model.is_trained else None
     }
-
-
-@app.post("/admin/load-crime-data")
-def reload_crime_data():
-    """Reload crime data from database."""
-    try:
-        logger.info("Reloading crime data from database...")
-        crime_handler.load_from_database()
-        
-        record_count = len(crime_handler.crime_data) if crime_handler.crime_data is not None else 0
-        logger.info(f"Crime data reloaded: {record_count} records")
-        
-        return {
-            "status": "success",
-            "message": "Crime data reloaded successfully",
-            "data_records": record_count
-        }
-    except Exception as e:
-        logger.error(f"Crime data reload failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/location/database/{location_id}")
-def get_location_from_database(location_id: int):
-    """
-    Fetch location info from your database.
-    
-    TODO: Replace with actual database query
-    Example response shows what to implement in your DB layer.
-    """
-    return {
-        "id": location_id,
-        "name": "Example Location",
-        "latitude": 28.6315,
-        "longitude": 77.2167,
-        "address": "Connaught Place, Delhi",
-        "description": "Database placeholder - implement your DB query here"
-    }
-
-
-@app.get("/route/database/{route_id}")
-def get_route_from_database(route_id: int):
-    """
-    Fetch route waypoints from your database.
-    
-    TODO: Replace with actual database query
-    """
-    return {
-        "id": route_id,
-        "name": "Example Route",
-        "waypoints": [
-            {"latitude": 28.6315, "longitude": 77.2167, "name": "Start"},
-            {"latitude": 28.6289, "longitude": 77.2215, "name": "Middle"},
-            {"latitude": 28.5700, "longitude": 77.2250, "name": "End"}
-        ],
-        "description": "Database placeholder - implement your DB query here"
-    }
-
-
-@app.post("/route/database/analyze/{route_id}")
-def analyze_route_from_database(route_id: int):
-    """
-    Fetch a route from database and analyze its safety.
-    Combines database query with ML analysis.
-    """
-    try:
-        route_data = get_route_from_database(route_id)
-        
-        waypoints = [
-            RoutePoint(
-                latitude=wp["latitude"],
-                longitude=wp["longitude"],
-                name=wp.get("name")
-            )
-            for wp in route_data["waypoints"]
-        ]
-        
-        route_request = RouteRequest(
-            waypoints=waypoints,
-            route_name=route_data.get("name", "Route")
-        )
-        
-        return analyze_route_safety(route_request)
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

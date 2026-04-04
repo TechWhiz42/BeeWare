@@ -4,9 +4,26 @@ import numpy as np
 from typing import Optional
 
 
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Calculate distance between two points in kilometers."""
+    R = 6371.0
+    lat1_rad = math.radians(lat1)
+    lon1_rad = math.radians(lon1)
+    lat2_rad = math.radians(lat2)
+    lon2_rad = math.radians(lon2)
+    
+    dlat = lat2_rad - lat1_rad
+    dlon = lon2_rad - lon1_rad
+    
+    a = math.sin(dlat / 2)**2 + math.cos(lat1_rad) * math.cos(lat2_rad) * math.sin(dlon / 2)**2
+    c = 2 * math.asin(math.sqrt(a))
+    
+    return R * c
+
+
 class FeatureExtractor:
-    def __init__(self, db=None):
-        self.db = db
+    def __init__(self):
+        pass
 
     def extract(
         self,
@@ -14,8 +31,9 @@ class FeatureExtractor:
         lon: float,
         timestamp: Optional[datetime.datetime] = None,
         segment_length_m: float = 100.0,
+        crime_density_norm: float = 0.0,
     ) -> np.ndarray:
-
+        """Extract feature vector for a location."""
         if timestamp is None:
             timestamp = datetime.datetime.now()
 
@@ -29,11 +47,12 @@ class FeatureExtractor:
             "is_rush_hour": 1.0 if (7 <= hour <= 9 or 17 <= hour <= 19) else 0.0,
         }
 
-        env = self._get_environment(lat, lon, hour)
+        env = self._get_environment(hour)
         features.update(env)
 
         features["isolation_score"] = 1.0 - features["poi_density_norm"]
         features["segment_length_norm"] = min(1.0, segment_length_m / 2000.0)
+        features["crime_density_norm"] = max(0.0, min(1.0, crime_density_norm))
 
         from risk_model import FEATURE_NAMES
 
@@ -44,30 +63,21 @@ class FeatureExtractor:
 
         return np.clip(vector, 0.0, 1.0)
 
-    def _get_environment(self, lat, lon, hour):
-        if self.db:
-            data = self._fetch_from_db(lat, lon)
-            if data:
-                return data
-        return self._estimate_environment(hour)
-
-    def _fetch_from_db(self, lat, lon):
-        return None
-
-    def _estimate_environment(self, hour):
+    def _get_environment(self, hour: float) -> dict:
+        """Get environmental features based on time."""
         is_night = hour >= 20 or hour <= 5
-
+        
         if is_night:
             return {
-                "is_lit": 0.4,
-                "poi_density_norm": 0.3,
-                "crowd_estimate": 0.2,
-                "police_proximity": 0.3,
+                "is_lit": 0.3,
+                "poi_density_norm": 0.2,
+                "crowd_estimate": 0.15,
+                "police_proximity": 0.35,
             }
         else:
             return {
-                "is_lit": 0.8,
-                "poi_density_norm": 0.6,
-                "crowd_estimate": 0.7,
-                "police_proximity": 0.4,
+                "is_lit": 0.75,
+                "poi_density_norm": 0.55,
+                "crowd_estimate": 0.65,
+                "police_proximity": 0.45,
             }
