@@ -32,15 +32,34 @@ class BeeWareSystem:
 
     def analyze_route(self,
                       coords: list[tuple[float, float]],
+                      crime_values: list[float] = None,
                       timestamp: datetime.datetime = None,
                       route_name: str = "Route") -> dict:
-        """Analyze a route."""
+        """Analyze a route.
+        
+        Args:
+          coords: List of (latitude, longitude) tuples
+          crime_values: Optional list of crime_density_norm for each point
+          timestamp: Analysis timestamp
+          route_name: Name for the route
+        """
         if not self.model.is_trained:
             raise ValueError("Model not trained. Call .train_from_csv() or .load() first.")
 
+        if crime_values is None:
+            crime_values = [0.0] * len(coords)
+        
+        if len(crime_values) != len(coords):
+            raise ValueError(f"crime_values length {len(crime_values)} must match coords length {len(coords)}")
+        
         segments = [
-            RouteSegment(lat, lon, name=f"Point {i+1}")
-            for i, (lat, lon) in enumerate(coords)
+            RouteSegment(
+                lat=lat,
+                lon=lon,
+                crime_density_norm=crime,
+                name=f"Point {i+1}"
+            )
+            for i, ((lat, lon), crime) in enumerate(zip(coords, crime_values))
         ]
         
         analysis = self.analyzer.analyze_route(

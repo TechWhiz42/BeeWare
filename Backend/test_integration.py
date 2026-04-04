@@ -85,12 +85,14 @@ def test_smooth_crime_penalty():
     assert result_high_crime["safety_score"] < result_base["safety_score"], \
         "High crime should lower safety score"
     
-    assert result_high_crime["safety_score"] > 0, \
-        "High crime should not completely override (smooth penalty)"
+    crime_impact = result_base["safety_score"] - result_high_crime["safety_score"]
+    assert crime_impact > 30, \
+        "High crime should have significant impact on safety score"
     
-    print(f"PASS: Smooth crime penalty test passed")
+    print(f"PASS: Crime-dominant penalty test passed")
     print(f"  Base crime (0.0): score={result_base['safety_score']:.1f}")
     print(f"  High crime (0.9): score={result_high_crime['safety_score']:.1f}")
+    print(f"  Crime impact: {crime_impact:.1f} points")
 
 
 def test_csv_training_validation():

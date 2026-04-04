@@ -63,7 +63,8 @@ class SafetyAnalysisService:
                 lat=wp["latitude"],
                 lon=wp["longitude"],
                 length_m=100.0,
-                name=wp.get("name", f"Point {i+1}")
+                name=wp.get("name", f"Point {i+1}"),
+                crime_density_norm=wp["crime_density_norm"],
             )
             segments.append(segment)
         

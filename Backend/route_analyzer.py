@@ -2,6 +2,7 @@ import datetime
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional
+from risk_model import FEATURE_NAMES
 
 
 @dataclass
@@ -10,6 +11,7 @@ class RouteSegment:
     lon: float
     length_m: float = 100.0
     name: str = ""
+    crime_density_norm: float = 0.0
 
     features: Optional[np.ndarray] = None
     risk_result: Optional[dict] = None
@@ -89,15 +91,23 @@ class RouteAnalyzer:
         segment_explanations = []
 
         for i, seg in enumerate(segments):
-            crime_density = 0.0
+            assert seg.crime_density_norm >= 0.0 and seg.crime_density_norm <= 1.0, \
+                f"Segment {i} crime_density_norm {seg.crime_density_norm} out of valid range [0, 1]"
             
             seg.features = self.extractor.extract(
                 lat=seg.lat,
                 lon=seg.lon,
                 timestamp=timestamp,
                 segment_length_m=seg.length_m,
-                crime_density_norm=crime_density,
+                crime_density_norm=seg.crime_density_norm,
             )
+
+            assert len(seg.features) == 11, \
+                f"Segment {i} feature vector length {len(seg.features)} != 11"
+            
+            crime_idx = FEATURE_NAMES.index("crime_density_norm")
+            assert seg.features[crime_idx] == seg.crime_density_norm, \
+                f"Segment {i} feature vector crime {seg.features[crime_idx]} != segment crime {seg.crime_density_norm}"
 
             seg.risk_result = self.model.predict_segment(seg.features)
             score = seg.risk_result["safety_score"]

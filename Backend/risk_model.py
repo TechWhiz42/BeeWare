@@ -60,6 +60,10 @@ class BeeWareRiskModel:
         if "label" not in df.columns:
             raise ValueError("Dataset must contain 'label' column")
 
+        n_rows = len(df)
+        if n_rows < 1000:
+            print(f"WARNING: Dataset has {n_rows} rows (recommended >= 1000)")
+
         X = df[FEATURE_NAMES].values
         y = df["label"].values
 
@@ -81,6 +85,16 @@ class BeeWareRiskModel:
 
         y_proba = self.model.predict_proba(X_test)
         auc = roc_auc_score(y_test, y_proba, multi_class="ovr")
+
+        if auc > 0.98:
+            print(f"WARNING: AUC {auc:.4f} > 0.98 (possible overfitting)")
+
+        unique, counts = np.unique(y, return_counts=True)
+        max_class = counts.max()
+        min_class = counts.min()
+        imbalance_ratio = max_class / min_class
+        if imbalance_ratio > 2.0:
+            print(f"WARNING: Class imbalance ratio {imbalance_ratio:.2f} (max/min: {max_class}/{min_class})")
 
         self.training_metrics = {
             "auc": round(auc, 4),
@@ -126,39 +140,33 @@ class BeeWareRiskModel:
         crime_density_idx = FEATURE_NAMES.index("crime_density_norm")
         crime_density = features[crime_density_idx]
         
+        assert 0.0 <= crime_density <= 1.0, \
+            f"Feature vector crime_density_norm {crime_density} not in valid range [0, 1]"
+        
         x = features.reshape(1, -1)
         pred = int(self.model.predict(x)[0])
         probas = self.model.predict_proba(x)[0]
         
-        alpha = 0.6
-        risk_boost = crime_density * alpha
+        p_safe = probas[0]
+        p_caution = probas[1]
+        p_high_risk = probas[2]
         
-        probas_adjusted = probas.copy()
-        probas_adjusted[2] = min(1.0, probas[2] + risk_boost)
-        probas_adjusted[0] = max(0.0, probas[0] - risk_boost * 0.7)
-        probas_adjusted[1] = max(0.0, probas[1] - risk_boost * 0.3)
-        probas_adjusted = probas_adjusted / probas_adjusted.sum()
+        base_risk = (p_caution * 0.4) + (p_high_risk * 1.0)
+        crime_penalty = crime_density * 0.7
+        final_risk = min(1.0, base_risk + crime_penalty)
+        safety_score = (1.0 - final_risk) * 100
         
-        p_caution = probas_adjusted[1]
-        p_high_risk = probas_adjusted[2]
-        
-        risk_score = p_caution * 0.5 + p_high_risk * 1.0
-        crime_penalty = crime_density * 0.3
-        final_risk = min(1.0, risk_score + crime_penalty)
-        safety_score = max(1.0, (1 - final_risk) * 100)
-        
-        pred_final = np.argmax(probas_adjusted)
-        label = ["Safe", "Caution", "High Risk"][pred_final]
-        color = ["#22c55e", "#f59e0b", "#ef4444"][pred_final]
+        label = ["Safe", "Caution", "High Risk"][pred]
+        color = ["#22c55e", "#f59e0b", "#ef4444"][pred]
 
         return {
-            "risk_class": pred_final,
+            "risk_class": pred,
             "label": label,
             "color": color,
             "safety_score": float(safety_score),
-            "probability_safe": float(probas_adjusted[0]),
-            "probability_caution": float(probas_adjusted[1]),
-            "probability_high_risk": float(probas_adjusted[2]),
+            "probability_safe": float(p_safe),
+            "probability_caution": float(p_caution),
+            "probability_high_risk": float(p_high_risk),
             "crime_density_norm": float(crime_density),
             "model_metrics": self.training_metrics
         }
