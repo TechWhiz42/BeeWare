@@ -32,41 +32,6 @@ const UI_COLORS = {
   divider: '#E0E0E0'
 };
 
-const METER_IMAGES = {
-  safety: {
-    green: require('../../assets/meter/Green.png'),
-    yellow: require('../../assets/meter/Yellow.png'),
-    orange: require('../../assets/meter/Orange.png'),
-    red: require('../../assets/meter/Red.png'),
-  },
-  crime: {
-    part: require('../../assets/meter/Cr_part.png'),
-    half: require('../../assets/meter/Cr_half.png'),
-    full: require('../../assets/meter/Cr_full.png'),
-  },
-  survivability: {
-    part: require('../../assets/meter/Sur_part.png'),
-    half: require('../../assets/meter/Sur_half.png'),
-    full: require('../../assets/meter/Sur_full.png'),
-  }
-};
-
-const getMeterImage = (mode, score) => {
-  if (mode === 'safety') {
-    if (score >= 70) return METER_IMAGES.safety.green;
-    if (score >= 40) return METER_IMAGES.safety.yellow;
-    return METER_IMAGES.safety.red; // Assuming red/orange mapped to high risk. Let's return red for the lowest to match a 3-step system.
-  } else if (mode === 'crime') {
-    if (score <= 30) return METER_IMAGES.crime.part;   // Low Crime
-    if (score <= 60) return METER_IMAGES.crime.half;   // Moderate Crime
-    return METER_IMAGES.crime.full;                    // High Crime
-  } else if (mode === 'survivability') {
-    if (score >= 70) return METER_IMAGES.survivability.full; // High Survivability
-    if (score >= 40) return METER_IMAGES.survivability.half; // Moderate Survivability
-    return METER_IMAGES.survivability.part;                  // Low Survivability
-  }
-};
-
 const getSuggestions = (mode, score) => {
   let label = "Moderate Risk";
   let suggestions = [];
@@ -298,7 +263,7 @@ const LocationSafetyScreen = () => {
           >
             <Ionicons name="time" size={18} color={UI_COLORS.text} />
             <Text style={styles.timeText}>
-              {timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              {timestamp.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true })}
             </Text>
           </TouchableOpacity>
         </View>
@@ -334,6 +299,7 @@ const LocationSafetyScreen = () => {
           display="spinner"
           themeVariant="light"
           textColor="#000000"
+          is24Hour={false}
           onChange={onTimeChange}
         />
       )}
@@ -352,7 +318,6 @@ const LocationSafetyScreen = () => {
             <View style={styles.cardHandle} />
             
             <View style={styles.scoreRow}>
-              <Image source={getMeterImage(mode, currentScore)} style={styles.meterImage} resizeMode="contain" />
               <View style={styles.scoreTextContainer}>
                 <Text style={[styles.scoreValue, { color: themeColor }]}>
                   <Text style={styles.scorePrefix}>Score: </Text>
@@ -490,15 +455,14 @@ const styles = StyleSheet.create({
   bottomSection: {
     position: 'absolute',
     bottom: Platform.OS === 'ios' ? 25 : 15,
-    left: 0,
-    right: 0,
+    left: 16,
+    right: 16,
     alignItems: 'center',
   },
   card: {
     backgroundColor: UI_COLORS.card,
-    borderRadius: 18,
+    borderRadius: 24,
     padding: 18,
-    marginHorizontal: 0,
     width: '100%',
     shadowColor: '#000',
     shadowOpacity: 0.3,
@@ -515,18 +479,14 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   scoreRow: {
-    flexDirection: 'row-reverse',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 4,
   },
-  meterImage: {
-    width: 42,
-    height: 42,
-    marginLeft: 16,
-  },
   scoreTextContainer: {
     justifyContent: 'center',
+    alignItems: 'center',
   },
   scoreValue: {
     fontSize: 42,
@@ -544,6 +504,7 @@ const styles = StyleSheet.create({
     fontSize: 18,
     color: UI_COLORS.text,
     fontWeight: '700',
+    textAlign: 'center',
     letterSpacing: 0.5,
   },
   divider: {
