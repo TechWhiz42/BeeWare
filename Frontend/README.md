@@ -2,6 +2,32 @@
 
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
+## Prerequisites: Start the Backend First
+
+Before starting the frontend app, you must start the FastAPI backend:
+
+1. **Get your machine's IP address** — Open PowerShell and run:
+   ```bash
+   ipconfig
+   ```
+   Look for your IPv4 Address (e.g., `192.168.x.x` or `10.x.x.x`)
+
+2. **Start the backend** — From the `Backend` folder with virtual environment activated:
+   ```bash
+   uvicorn main:app --host YOUR_IP_ADDRESS --port 8000
+   ```
+   Replace `YOUR_IP_ADDRESS` with the IPv4 from ipconfig. For example:
+   ```bash
+   uvicorn main:app --host 10.123.47.245 --port 8000
+   ```
+
+3. **Update frontend config** — Edit `src/config.js` and set:
+   ```javascript
+   export const API_BASE_URL = 'http://YOUR_IP_ADDRESS:8000';
+   ```
+
+4. **Verify backend is running** — Open `http://YOUR_IP_ADDRESS:8000/docs` in your browser to see the API documentation
+
 ## Get started
 
 1. Install dependencies
