@@ -12,42 +12,43 @@ from route_analyzer import RouteAnalyzer
 from service import SafetyAnalysisService
 from validators import (
     validate_latitude, validate_longitude, validate_crime_density,
-    ValidationError, get_crime_density
+    ValidationError
 )
-from database import AREA_COORDINATES, CRIME_STATS, normalize_crime_density
+from database import SessionLocal, AreaFeature
 
 logger = logging.getLogger(__name__)
 
 
-def _create_area_features():
-    """
-    Create area features from database coordinates and crime data.
-    Returns list of dicts with geocoded features for spatial interpolation.
-    """
+def _load_area_features_from_db():
     area_features = []
+    session = SessionLocal()
     
-    for area_id, (latitude, longitude) in AREA_COORDINATES.items():
-        crime_count = CRIME_STATS.get(area_id, 0)
-        crime_density = normalize_crime_density(crime_count)
+    try:
+        records = session.query(AreaFeature).all()
         
-        # Create realistic synthetic features based on area properties
-        # In a production system, these would come from actual data sources
-        area_features.append({
-            "latitude": latitude,
-            "longitude": longitude,
-            "crime_score": crime_density,
-            "population_density": 0.6,  # Moderate population across Lucknow
-            "road_density": 0.7,  # Good road infrastructure
-            "night_light_intensity": 0.65,  # Urban night lighting
-        })
+        for record in records:
+            area_features.append({
+                "latitude": record.latitude,
+                "longitude": record.longitude,
+                "crime_score": record.crime_score,
+                "population_density": record.population_density,
+                "road_density": record.road_density,
+                "night_light_intensity": record.night_light_intensity,
+            })
+        
+        logger.info(f"Loaded {len(area_features)} real area features from database")
+    
+    except Exception as e:
+        logger.warning(f"Failed to load from database: {e}.")
+    
+    finally:
+        session.close()
     
     return area_features
 
 
 model = BeeWareRiskModel()
-# Initialize extractor with area features from database
-area_features = _create_area_features()
-extractor = FeatureExtractor(area_features=area_features)
+extractor = FeatureExtractor()
 analyzer = RouteAnalyzer(model, extractor)
 service = SafetyAnalysisService(model, extractor, analyzer)
 
@@ -59,6 +60,13 @@ async def lifespan(app: FastAPI):
         model.load("beeware_model.pkl")
     except Exception as e:
         logger.warning(f"Could not load model: {e}")
+    
+    try:
+        area_features = _load_area_features_from_db()
+        extractor.set_area_features(area_features)
+        logger.info(f"Initialized feature extractor with {len(area_features)} area features")
+    except Exception as e:
+        logger.error(f"Failed to initialize extractor with database features: {e}")
     
     yield
 
@@ -192,13 +200,10 @@ def analyze_location_safety(request: LocationRequest):
     Returns safety assessment with or without trained model (uses fallback if needed).
     """
     try:
-        crime = get_crime_density(request.latitude, request.longitude)
-        
         result = service.analyze_location(
             latitude=request.latitude,
             longitude=request.longitude,
             timestamp=request.timestamp,
-            crime_density_norm=crime,
         )
         return LocationResponse(**result)
     except ValidationError as e:
@@ -223,13 +228,10 @@ def analyze_route_safety(request: RouteRequest):
     try:
         waypoints_data = []
         for wp in request.waypoints:
-            crime = get_crime_density(wp.latitude, wp.longitude)
-            
             waypoints_data.append({
                 "latitude": wp.latitude,
                 "longitude": wp.longitude,
                 "timestamp": wp.timestamp,
-                "crime_density_norm": crime,
                 "name": wp.name,
             })
         
@@ -262,13 +264,10 @@ def analyze_multiple_locations(request: BulkLocationRequest):
     try:
         locations_data = []
         for loc in request.locations:
-            crime = get_crime_density(loc.latitude, loc.longitude)
-            
             locations_data.append({
                 "latitude": loc.latitude,
                 "longitude": loc.longitude,
                 "timestamp": loc.timestamp,
-                "crime_density_norm": crime,
             })
         
         result = service.analyze_multiple_locations(locations_data)

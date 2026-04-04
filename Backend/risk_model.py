@@ -1,305 +1,346 @@
 import pickle
 import numpy as np
 import pandas as pd
-
-from sklearn.ensemble import RandomForestClassifier
+import warnings
+from datetime import datetime
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import roc_auc_score
-from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
 
+warnings.filterwarnings('ignore')
 
 FEATURE_NAMES = [
-    "crime_density",
-    "population_density",
+    "crime_score",
+    "population_density_norm",
     "road_density",
-    "visibility_score",
+    "night_light_intensity_norm",
 ]
 
 
 class BeeWareRiskModel:
     def __init__(self):
         self.model = None
+        self.scaler = StandardScaler()
         self.is_trained = False
         self.training_metrics = {}
+        self.feature_names = FEATURE_NAMES
+        self.normalization_params = {}
 
-    def build_pipeline(self):
-        """Build ML pipeline with standardization and calibration."""
-        rf = RandomForestClassifier(
-            n_estimators=150,
-            max_depth=10,
-            random_state=42,
-            n_jobs=-1,
-            class_weight="balanced",
-        )
-
-        calibrated = CalibratedClassifierCV(rf, method="isotonic", cv=3)
-
-        return Pipeline([
-            ("scaler", StandardScaler()),
-            ("clf", calibrated)
-        ])
-
-
-    def train_from_csv(self, csv_path):
-        """Train model from CSV dataset with improved validation."""
-        from sklearn.model_selection import cross_val_score
+    def train_from_excel(self, excel_file_path):
+        print("\nTraining ML model from Excel dataset\n" + "="*50 + "\n")
         
-        df = pd.read_csv(csv_path)
-
-        if not all(col in df.columns for col in FEATURE_NAMES):
-            missing = [f for f in FEATURE_NAMES if f not in df.columns]
-            raise ValueError(f"Dataset missing required features: {missing}")
-
-        if "label" not in df.columns:
-            raise ValueError("Dataset must contain 'label' column")
-
-        n_rows = len(df)
-        if n_rows < 1000:
-            print(f"WARNING: Dataset has {n_rows} rows (recommended >= 1000)")
-            print(f"   Small dataset may lead to overfitting")
-
-        X = df[FEATURE_NAMES].values
-        y = df["label"].values
-
-        if np.isnan(X).any():
-            raise ValueError("Dataset contains NaN values")
-
-        if not (np.all(X >= 0) and np.all(X <= 1)):
-            raise ValueError("All feature values must be normalized between 0 and 1")
-
-        # Train/test split
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y,
-            test_size=0.2,
-            stratify=y,
-            random_state=42
-        )
-
-        # Build and train pipeline
-        self.model = self.build_pipeline()
-        self.model.fit(X_train, y_train)
-
-        # Evaluation on test set
-        y_pred = self.model.predict(X_test)
-        y_proba = self.model.predict_proba(X_test)
+        print(f"Reading Excel file: {excel_file_path}")
         
-        from sklearn.metrics import classification_report, confusion_matrix
-        auc = roc_auc_score(y_test, y_proba, multi_class="ovr")
-        
-        print(f"\nTest Set Performance:")
-        print(f"   AUC: {auc:.4f}")
-        if auc > 0.98:
-            print(f"   WARNING: AUC {auc:.4f} > 0.98 (possible overfitting)")
-
-        # Cross-validation on full dataset
-        print(f"\nCross-Validation (5-fold on full dataset):")
-        cv_scores = cross_val_score(
-            self.build_pipeline(), X, y, 
-            cv=5, scoring='roc_auc_ovr', n_jobs=-1
-        )
-        print(f"   Fold scores: {[round(s, 4) for s in cv_scores]}")
-        print(f"   Mean: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
-        if cv_scores.std() > 0.15:
-            print(f"   WARNING: High variance across folds (possible instability)")
-
-        # Class balance
-        unique, counts = np.unique(y, return_counts=True)
-        max_class = counts.max()
-        min_class = counts.min()
-        imbalance_ratio = max_class / min_class
-        if imbalance_ratio > 2.0:
-            print(f"\nWARNING: Class imbalance ratio {imbalance_ratio:.2f} (max/min: {max_class}/{min_class})")
-
-        # Detailed classification report
-        print(f"\nClassification Report:")
-        print(classification_report(y_test, y_pred, target_names=["Safe", "Caution", "High Risk"]))
-
-        self.training_metrics = {
-            "auc": round(auc, 4),
-            "cv_mean_auc": round(cv_scores.mean(), 4),
-            "cv_std_auc": round(cv_scores.std(), 4),
-            "train_samples": len(X_train),
-            "test_samples": len(X_test),
-            "n_features": X.shape[1],
-            "dataset_source": "csv",
-            "class_imbalance_ratio": round(imbalance_ratio, 2),
-        }
-
-        self.is_trained = True
-        print(f"\nModel trained and saved successfully")
-        return self
-
-    def save(self, path="beeware_model.pkl"):
-        """Save trained model to disk."""
-        if not self.is_trained:
-            raise ValueError("Cannot save untrained model")
-
-        with open(path, "wb") as f:
-            pickle.dump({
-                "model": self.model,
-                "metrics": self.training_metrics,
-                "feature_names": FEATURE_NAMES
-            }, f)
+        try:
+            df = pd.read_excel(excel_file_path)
+            print(f"Successfully loaded {len(df)} records\n")
+            
+            print(f"Dataset columns: {list(df.columns)}\n")
+            
+            required_cols = ['crime_score', 'population_density', 'road_density', 
+                           'night_light_intensity', 'risk_score']
+            missing = [col for col in required_cols if col not in df.columns]
+            if missing:
+                raise ValueError(f"Missing columns: {missing}")
+            
+            print("Dataset statistics:")
+            print(f"   Crime Score           - Min: {df['crime_score'].min():.3f}, Max: {df['crime_score'].max():.3f}, Mean: {df['crime_score'].mean():.3f}")
+            print(f"   Population Density    - Min: {df['population_density'].min():.0f}, Max: {df['population_density'].max():.0f}, Mean: {df['population_density'].mean():.0f}")
+            print(f"   Road Density          - Min: {df['road_density'].min():.3f}, Max: {df['road_density'].max():.3f}, Mean: {df['road_density'].mean():.3f}")
+            print(f"   Night Light Intensity - Min: {df['night_light_intensity'].min():.0f}, Max: {df['night_light_intensity'].max():.0f}, Mean: {df['night_light_intensity'].mean():.0f}")
+            print(f"   Risk Score (Target)   - Min: {df['risk_score'].min():.3f}, Max: {df['risk_score'].max():.3f}, Mean: {df['risk_score'].mean():.3f}\n")
+            
+            self.normalization_params = {
+                'pop_density_min': df['population_density'].min(),
+                'pop_density_max': df['population_density'].max(),
+                'night_light_min': df['night_light_intensity'].min(),
+                'night_light_max': df['night_light_intensity'].max(),
+            }
+            
+            df['population_density_norm'] = (
+                (df['population_density'] - self.normalization_params['pop_density_min']) / 
+                (self.normalization_params['pop_density_max'] - self.normalization_params['pop_density_min'] + 1e-8)
+            )
+            df['night_light_intensity_norm'] = (
+                (df['night_light_intensity'] - self.normalization_params['night_light_min']) / 
+                (self.normalization_params['night_light_max'] - self.normalization_params['night_light_min'] + 1e-8)
+            )
+            
+            # Prepare features and target
+            X = df[[
+                'crime_score',
+                'population_density_norm',
+                'road_density',
+                'night_light_intensity_norm'
+            ]].values
+            y = df['risk_score'].values
+            
+            print(f"Feature matrix shape: {X.shape}")
+            print(f"Target vector shape: {y.shape}\n")
+            
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+            
+            print(f"Data split:")
+            print(f"   Training samples: {len(X_train)}")
+            print(f"   Test samples: {len(X_test)}\n")
+            
+            X_train_scaled = self.scaler.fit_transform(X_train)
+            X_test_scaled = self.scaler.transform(X_test)
+            
+            print(f"Training RandomForest model...")
+            print(f"   Estimators: 200")
+            print(f"   Max depth: 20")
+            print(f"   Min samples split: 10")
+            print(f"   Min samples leaf: 4\n")
+            
+            self.model = RandomForestRegressor(
+                n_estimators=200,
+                max_depth=20,
+                min_samples_split=10,
+                min_samples_leaf=4,
+                random_state=42,
+                n_jobs=-1,
+                verbose=0
+            )
+            self.model.fit(X_train_scaled, y_train)
+            
+            print(f"Model evaluation:")
+            y_train_pred = self.model.predict(X_train_scaled)
+            y_test_pred = self.model.predict(X_test_scaled)
+            
+            train_rmse = np.sqrt(mean_squared_error(y_train, y_train_pred))
+            test_rmse = np.sqrt(mean_squared_error(y_test, y_test_pred))
+            train_r2 = r2_score(y_train, y_train_pred)
+            test_r2 = r2_score(y_test, y_test_pred)
+            train_mae = mean_absolute_error(y_train, y_train_pred)
+            test_mae = mean_absolute_error(y_test, y_test_pred)
+            
+            self.training_metrics = {
+                'train_rmse': float(train_rmse),
+                'test_rmse': float(test_rmse),
+                'train_r2': float(train_r2),
+                'test_r2': float(test_r2),
+                'train_mae': float(train_mae),
+                'test_mae': float(test_mae),
+                'training_samples': len(X_train),
+                'test_samples': len(X_test),
+                'total_samples': len(X),
+            }
+            
+            print(f"   Train RMSE: {train_rmse:.4f}")
+            print(f"   Test RMSE:  {test_rmse:.4f}")
+            print(f"   Train R2:   {train_r2:.4f}")
+            print(f"   Test R2:    {test_r2:.4f}")
+            print(f"   Train MAE:  {train_mae:.4f}")
+            print(f"   Test MAE:   {test_mae:.4f}\n")
+            
+            print(f"Feature importance ranking:")
+            importance = self.model.feature_importances_
+            sorted_idx = np.argsort(importance)[::-1]
+            for idx in sorted_idx:
+                print(f"   {self.feature_names[idx]:30s} - {importance[idx]:.4f}")
+            
+            self.is_trained = True
+            
+            print("\nModel training completed successfully!" + "\n")
+            return self
+            
+        except Exception as e:
+            print(f"Error during training: {e}")
+            raise
 
     def load(self, path="beeware_model.pkl"):
-        """Load trained model from disk."""
-        with open(path, "rb") as f:
-            data = pickle.load(f)
+        try:
+            with open(path, 'rb') as f:
+                data = pickle.load(f)
+            self.model = data.get('model')
+            self.scaler = data.get('scaler')
+            self.training_metrics = data.get('metrics', {})
+            self.feature_names = data.get('feature_names', self.feature_names)
+            self.normalization_params = data.get('normalization_params', {})
+            self.is_trained = data.get('is_trained', False)
+            print(f"Model loaded from {path}")
+            print(f"   Test R2 score: {self.training_metrics.get('test_r2', 'N/A')}")
+            print(f"   Training samples: {self.training_metrics.get('total_samples', 'N/A')}")
+            return self
+        except FileNotFoundError:
+            print(f"Model file not found: {path}")
+            self.is_trained = False
+            return self
+        except Exception as e:
+            print(f"Failed to load model: {e}")
+            self.is_trained = False
+            return self
 
-        self.model = data["model"]
-        self.training_metrics = data.get("metrics", {})
-        self.is_trained = True
-        return self
-
-    def predict_segment(self, features):
+    def predict_segment(self, features, timestamp: datetime = None):
         """
-        Predict risk for a segment using deterministic formula.
+        Predict risk score using trained ML model.
         
-        Feature vector (4 features):
-        0: crime_density
-        1: population_density
-        2: road_density
-        3: visibility_score
+        Args:
+            features: [crime_score, pop_density_norm, road_density, night_light_norm]
+            timestamp: datetime object (for time-based context)
+        
+        Returns:
+            Dict with safety_score, label, color, confidence, explanation
         """
+        if not self.is_trained or self.model is None:
+            raise RuntimeError("Model not trained. Call train_from_excel() first.")
+        
+        # Validate feature count
         if len(features) != 4:
-            raise ValueError(f"Feature vector must have 4 values, got {len(features)}")
-
-        # Extract features by index
-        crime_density = float(features[0])
-        population_density = float(features[1])
-        road_density = float(features[2])
-        visibility_score = float(features[3])
+            raise ValueError(f"Expected 4 features, got {len(features)}")
         
-        # Validation
-        assert 0.0 <= crime_density <= 1.0, f"crime_density {crime_density} not in [0,1]"
-        assert np.all(features >= 0) and np.all(features <= 1), f"Features out of range [0,1]: {features}"
+        # Validate feature ranges
+        for i, f in enumerate(features):
+            if not (0.0 <= f <= 1.0):
+                raise ValueError(f"Feature '{self.feature_names[i]}' out of range [0,1]: {f}")
         
-        # === DETERMINISTIC SAFETY SCORE FORMULA ===
-        # risk = (0.6 * crime_density + 
-        #         0.15 * (1 - visibility_score) + 
-        #         0.15 * (1 - road_density) + 
-        #         0.10 * (1 - population_density))
+        # Prepare input for prediction
+        X = np.array([features])
+        X_scaled = self.scaler.transform(X)
         
-        risk = (
-            0.6 * crime_density +
-            0.15 * (1.0 - visibility_score) +
-            0.15 * (1.0 - road_density) +
-            0.10 * (1.0 - population_density)
-        )
+        # Predict risk score using trained model
+        risk_score = float(self.model.predict(X_scaled)[0])
+        risk_score = np.clip(risk_score, 0.0, 1.0)
         
-        # Clamp risk to [0, 1]
-        risk = max(0.0, min(1.0, risk))
+        # Convert risk to safety score
+        safety_score = 100.0 * (1.0 - risk_score)
         
-        # Convert to safety score [0, 100]
-        safety_score = 100.0 * (1.0 - risk)
-        safety_score = max(0.0, min(100.0, safety_score))
+        # Handle timestamp for time-based adjustments
+        if timestamp is None:
+            timestamp = datetime.now()
         
-        # Determine risk class based on safety score
+        hour = timestamp.hour
+        is_night = (hour >= 22 or hour < 6)
+        is_rush_hour = (7 <= hour <= 10 or 18 <= hour <= 21)
+        
+        # Minimal time adjustments (model already captures most patterns)
+        if is_night:
+            safety_score *= 0.93  # Reduce by 7% at night
+        elif is_rush_hour:
+            safety_score *= 0.97  # Reduce by 3% during rush hour
+        
+        safety_score = np.clip(safety_score, 0.0, 100.0)
+        
+        # Determine label and color
         if safety_score >= 70:
-            risk_class = 0  # Safe
             label = "Safe"
             color = "#22c55e"
+            risk_class = 0
         elif safety_score >= 45:
-            risk_class = 1  # Caution
             label = "Caution"
             color = "#f59e0b"
+            risk_class = 1
         else:
-            risk_class = 2  # High Risk
             label = "High Risk"
             color = "#ef4444"
+            risk_class = 2
         
-        # Confidence (based on feature extremity)
+        # Calculate confidence
+        crime_score, pop_density, road_density, visibility = features
         extremity = max(
-            abs(crime_density - 0.5) * 2,
-            abs(visibility_score - 0.5) * 2,
+            abs(crime_score - 0.5) * 2,
+            abs(visibility - 0.5) * 2,
             abs(road_density - 0.5) * 2
         )
-        confidence = float(min(0.95, 0.5 + extremity * 0.5))
+        confidence = float(min(0.99, 0.6 + extremity * 0.39))
         
-        # Dummy probabilities for compatibility
-        probabilities = [
-            1.0 - (risk * 1.5) if risk_class == 0 else 0.2,
-            0.4 if risk_class == 1 else 0.3,
-            risk if risk_class == 2 else 0.2
-        ]
-        probabilities = [max(0.0, min(1.0, p)) for p in probabilities]
-        total = sum(probabilities)
-        if total > 0:
-            probabilities = [p / total for p in probabilities]
-        else:
-            probabilities = [1.0/3, 1.0/3, 1.0/3]
-        
-        # Build explanation from key factors
+        # Build explanation
         explanation = self._build_explanation(
-            safety_score=safety_score,
-            crime_density=crime_density,
-            visibility_score=visibility_score,
-            road_density=road_density,
-            population_density=population_density,
+            crime_score, pop_density, road_density, visibility, 
+            safety_score, is_night, is_rush_hour
         )
+        
+        # Calculate probability distribution based on safety score
+        if safety_score >= 70:
+            prob_safe = (safety_score - 70) / 30 + 0.4  # 0.4 to 1.0
+            prob_caution = 1.0 - prob_safe
+            prob_high_risk = 0.0
+        elif safety_score >= 45:
+            prob_caution = (safety_score - 45) / 25 + 0.4
+            prob_safe = (safety_score - 45) / 25 * 0.5
+            prob_high_risk = 1.0 - prob_caution - prob_safe
+        else:
+            prob_high_risk = (45 - safety_score) / 45 + 0.5
+            prob_caution = 1.0 - prob_high_risk
+            prob_safe = 0.0
         
         return {
             "risk_class": risk_class,
             "label": label,
             "color": color,
             "safety_score": float(safety_score),
-            "confidence": float(round(confidence, 3)),
+            "confidence": confidence,
             "explanation": explanation,
-            "probability_safe": float(probabilities[0]),
-            "probability_caution": float(probabilities[1]),
-            "probability_high_risk": float(probabilities[2]),
-            "crime_density": float(crime_density),
-            "model_metrics": self.training_metrics
+            "crime_density": float(crime_score),
+            "timestamp": timestamp.isoformat() if timestamp else None,
+            "probability_safe": max(0.0, min(1.0, float(prob_safe))),
+            "probability_caution": max(0.0, min(1.0, float(prob_caution))),
+            "probability_high_risk": max(0.0, min(1.0, float(prob_high_risk))),
         }
-    
-    def _build_explanation(self, 
-                          safety_score: float,
-                          crime_density: float,
-                          visibility_score: float,
-                          road_density: float,
-                          population_density: float) -> list:
-        """
-        Build human-readable explanation of risk factors.
-        
-        Returns list of strings explaining the safety assessment.
-        """
+
+    def _build_explanation(self, crime, pop_density, road_density, visibility,
+                          safety_score, is_night, is_rush_hour):
+        """Build human-readable explanation incorporating all features."""
         factors = []
         
-        # Crime factor
-        if crime_density > 0.80:
-            factors.append("High crime area")
-        elif crime_density > 0.60:
-            factors.append("Moderate-high crime area")
-        elif crime_density > 0.40:
-            factors.append("Moderate crime area")
+        # Crime assessment
+        if crime > 0.7:
+            factors.append("High crime area - significant risk")
+        elif crime > 0.4:
+            factors.append("Moderate crime - standard precautions")
+        else:
+            factors.append("Low crime area - generally safe")
         
-        # Visibility (lighting)
-        if visibility_score < 0.30:
-            factors.append("Low visibility increases risk")
-        elif visibility_score > 0.70:
-            factors.append("Good visibility")
+        # Environmental assessment
+        if visibility < 0.3:
+            factors.append("Low visibility - increased risk")
+        elif visibility > 0.7:
+            factors.append("Good lighting and visibility")
         
-        # Road connectivity
-        if road_density < 0.30:
+        if road_density > 0.7:
+            factors.append("Well-connected roads improve safety")
+        elif road_density < 0.3:
             factors.append("Poor road connectivity")
-        elif road_density > 0.70:
-            factors.append("Better road connectivity improves safety")
         
         # Population density
-        if population_density < 0.30:
-            factors.append("Low population density")
-        elif population_density > 0.70:
-            factors.append("High population density area")
+        if pop_density > 0.7:
+            factors.append("Crowded area - more witnesses/help available")
+        elif pop_density < 0.3:
+            factors.append("Sparse area - limited nearby support")
         
-        # If no specific factors, add general assessment
+        # Time-based
+        if is_night:
+            factors.append("Night time - reduce travel if possible")
+        
+        if is_rush_hour:
+            factors.append("Rush hour - congested but active")
+        
+        # Default if no factors
         if not factors:
             if safety_score >= 75:
-                factors.append("Safe area with favorable conditions")
+                factors.append("Overall safe area")
             elif safety_score >= 50:
-                factors.append("Standard caution advised")
+                factors.append("Exercise caution")
             else:
-                factors.append("Avoid if alternative routes available")
+                factors.append("High risk - avoid if possible")
         
         return factors
+
+    def save(self, path="beeware_model.pkl"):
+        """Save trained model, scaler, and metadata."""
+        data = {
+            'model': self.model,
+            'scaler': self.scaler,
+            'metrics': self.training_metrics,
+            'feature_names': self.feature_names,
+            'normalization_params': self.normalization_params,
+            'is_trained': self.is_trained,
+        }
+        with open(path, 'wb') as f:
+            pickle.dump(data, f)
+        print(f"✅ Model saved to {path}")
+        return self

@@ -12,15 +12,8 @@ logger = logging.getLogger(__name__)
 
 
 def _get_fallback_result(latitude: float, longitude: float, crime: float) -> Dict[str, Any]:
-    """
-    Generate a fallback result when model/db fails.
-    Approximates safety based on crime alone (graceful degradation).
-    """
-    # Simple approximation: safety = 100 - (crime * 100)
-    # With some stability bounds
     approx_safety = max(0.0, min(100.0, 100 - (crime * 70)))
     
-    # Determine category
     if approx_safety >= 70:
         label, color = "Safe", "#22c55e"
     elif approx_safety >= 45:
@@ -42,7 +35,6 @@ def _get_fallback_result(latitude: float, longitude: float, crime: float) -> Dic
         "confidence": 0.5,
         "explanation": ["Fallback calculation: model unavailable"],
         "timestamp": datetime.now().isoformat(),
-        "is_fallback": True,
     }
 
 
@@ -109,7 +101,6 @@ class SafetyAnalysisService:
                 label = "High Risk"
                 color = "#ef4444"
             
-            # Build explanation with time context
             explanation = prediction["explanation"][:]
             hour = timestamp.hour
             if hour >= 22 or hour < 6:
@@ -132,23 +123,16 @@ class SafetyAnalysisService:
                 "crime_density_norm": crime_density_norm,
                 "timestamp": format_timestamp(timestamp),
                 "time_features": time_features,
-                "is_fallback": False,
             }
             
             return result
         except Exception as e:
             logger.error(f"Error in analyze_location: {str(e)}")
-            # Return fallback
             return _get_fallback_result(latitude, longitude, crime_density_norm)
     
     def analyze_route(self, waypoints: List[Dict[str, Any]], 
                      route_name: str, timestamp: Optional[datetime] = None) -> Dict[str, Any]:
-        """
-        Analyze safety of a route with time-based risk adjustment.
-        Uses spatial interpolation to compute features, not pre-computed crime values.
-        """
         try:
-            # Ensure timestamp is not None
             if timestamp is None:
                 timestamp = datetime.now()
             
@@ -198,11 +182,9 @@ class SafetyAnalysisService:
                 ],
                 "recommendations": analysis.recommendations,
                 "processing_time_ms": analysis.processing_time_ms,
-                "is_fallback": False,
             }
         except Exception as e:
             logger.error(f"Error in analyze_route: {str(e)}")
-            # Return fallback with approximation
             approx_safety = 50.0
             category, color = "Caution", "#f59e0b"
             
@@ -219,11 +201,9 @@ class SafetyAnalysisService:
                 "segment_details": [],
                 "recommendations": ["Route analysis failed, use fallback estimate"],
                 "processing_time_ms": 0.0,
-                "is_fallback": True,
             }
     
     def analyze_multiple_locations(self, locations: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Analyze safety of multiple locations."""
         try:
             results = []
             high_risk_count = 0
