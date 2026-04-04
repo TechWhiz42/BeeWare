@@ -92,45 +92,74 @@ class RouteAnalyzer:
         segment_explanations = []
 
         for i, seg in enumerate(segments):
-            # Extract features using spatial interpolation (no timestamp, no crime_density_norm)
-            seg.features = self.extractor.extract(
-                lat=seg.lat,
-                lon=seg.lon,
-                segment_length_m=seg.length_m,
-            )
+            try:
+                # Extract features using spatial interpolation
+                seg.features = self.extractor.extract(
+                    lat=seg.lat,
+                    lon=seg.lon,
+                    segment_length_m=seg.length_m,
+                )
 
-            # Validate feature vector (should be 7 features)
-            assert len(seg.features) == 7, \
-                f"Segment {i} feature vector length {len(seg.features)} != 7"
-            
-            assert np.all(seg.features >= 0) and np.all(seg.features <= 1), \
-                f"Segment {i} features out of range [0,1]: {seg.features}"
+                # Validate feature vector (should be 4 features)
+                assert len(seg.features) == 4, \
+                    f"Segment {i} feature vector length {len(seg.features)} != 4"
+                
+                assert np.all(seg.features >= 0) and np.all(seg.features <= 1), \
+                    f"Segment {i} features out of range [0,1]: {seg.features}"
 
-            # Get prediction
-            seg.risk_result = self.model.predict_segment(seg.features)
-            score = seg.risk_result["safety_score"]
-            segment_scores.append(score)
-            segment_lengths.append(seg.length_m)
-            risk_class = seg.risk_result["risk_class"]
-            
-            explanation = self._build_segment_explanation(seg.risk_result, i)
+                # Get prediction
+                seg.risk_result = self.model.predict_segment(seg.features)
+                score = seg.risk_result["safety_score"]
+                
+                # Apply time-based risk adjustment
+                from time_utils import get_time_risk_multiplier
+                time_multiplier = get_time_risk_multiplier(timestamp)
+                adjusted_score = score / time_multiplier
+                adjusted_score = max(0.0, min(100.0, adjusted_score))
+                
+                segment_scores.append(adjusted_score)
+                segment_lengths.append(seg.length_m)
+                risk_class = seg.risk_result["risk_class"]
+                
+                explanation = self._build_segment_explanation(seg.risk_result, i)
 
-            seg_info = {
-                "index": i,
-                "name": seg.name or f"Segment {i+1}",
-                "lat": seg.lat,
-                "lon": seg.lon,
-                "length_m": seg.length_m,
-                "safety_score": score,
-                "label": seg.risk_result["label"],
-                "color": seg.risk_result["color"],
-                "explanation": explanation,
-            }
-            segment_results.append(seg_info)
-            segment_explanations.append(explanation)
+                seg_info = {
+                    "index": i,
+                    "name": seg.name or f"Segment {i+1}",
+                    "lat": seg.lat,
+                    "lon": seg.lon,
+                    "length_m": seg.length_m,
+                    "safety_score": adjusted_score,
+                    "label": seg.risk_result["label"],
+                    "color": seg.risk_result["color"],
+                    "explanation": explanation,
+                }
+                segment_results.append(seg_info)
+                segment_explanations.append(explanation)
 
-            if risk_class == 2:
-                high_risk_segments.append(seg_info)
+                if risk_class == 2:
+                    high_risk_segments.append(seg_info)
+            except Exception as e:
+                # Fallback for failed segment
+                import logging
+                logging.error(f"Error analyzing segment {i}: {str(e)}")
+                fallback_score = 50.0
+                segment_scores.append(fallback_score)
+                segment_lengths.append(seg.length_m)
+                
+                seg_info = {
+                    "index": i,
+                    "name": seg.name or f"Segment {i+1}",
+                    "lat": seg.lat,
+                    "lon": seg.lon,
+                    "length_m": seg.length_m,
+                    "safety_score": fallback_score,
+                    "label": "Caution",
+                    "color": "#f59e0b",
+                    "explanation": ["Analysis failed for this segment"],
+                }
+                segment_results.append(seg_info)
+                segment_explanations.append("Analysis failed for this segment")
 
         n_high = len(high_risk_segments)
         n_total = len(segments)

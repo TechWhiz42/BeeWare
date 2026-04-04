@@ -38,7 +38,8 @@ def _get_fallback_result(latitude: float, longitude: float, crime: float) -> Dic
         "probability_caution": 0.3,
         "probability_high_risk": max(0.0, (100 - approx_safety) / 100),
         "crime_density_norm": crime,
-        "confidence": 0.5,  # Low confidence for fallback
+        "crime_density": crime,
+        "confidence": 0.5,
         "explanation": ["Fallback calculation: model unavailable"],
         "timestamp": datetime.now().isoformat(),
         "is_fallback": True,
@@ -66,9 +67,9 @@ class SafetyAnalysisService:
             crime_density_norm: Crime density (kept for API compatibility)
         """
         try:
-            if not self.model.is_trained:
-                logger.warning("Model not trained, using fallback")
-                return _get_fallback_result(latitude, longitude, crime_density_norm)
+            # Ensure timestamp is not None
+            if timestamp is None:
+                timestamp = datetime.now()
             
             # Extract features using spatial interpolation
             features = self.extractor.extract(
@@ -77,42 +78,59 @@ class SafetyAnalysisService:
                 segment_length_m=100.0,
             )
             
-            prediction = self.model.predict_segment(features)
+            # Get base safety score from deterministic formula
+            try:
+                prediction = self.model.predict_segment(features)
+            except Exception as e:
+                logger.error(f"Model prediction failed: {str(e)}")
+                return _get_fallback_result(latitude, longitude, crime_density_norm)
             
-            # Apply time-based risk adjustment if timestamp provided
-            adjusted_safety_score = prediction["safety_score"]
-            time_features = {}
-            time_label = ""
+            # Apply time-based risk adjustment
+            base_score = prediction["safety_score"]
+            time_multiplier = get_time_risk_multiplier(timestamp)
             
-            if timestamp:
-                time_features = extract_time_features(timestamp)
-                time_multiplier = get_time_risk_multiplier(timestamp)
-                # Apply time multiplier to adjust safety score
-                # Lower score = higher risk, so multiply by multiplier
-                adjusted_safety_score = prediction["safety_score"] / time_multiplier
-                adjusted_safety_score = max(0.0, min(100.0, adjusted_safety_score))
-                
-                # Adjust label if time makes it significantly riskier
-                if adjusted_safety_score < 45 and prediction["safety_score"] >= 45:
-                    prediction["label"] = "Caution"
-                    prediction["color"] = "#f59e0b"
-                elif adjusted_safety_score < 25 and prediction["safety_score"] >= 25:
-                    prediction["label"] = "High Risk"
-                    prediction["color"] = "#ef4444"
+            # Time multiplier > 1 means higher risk (night time)
+            # So we reduce the safety score
+            adjusted_safety_score = base_score / time_multiplier
+            adjusted_safety_score = max(0.0, min(100.0, adjusted_safety_score))
+            
+            # Extract time features for response
+            time_features = extract_time_features(timestamp)
+            
+            # Update label if time significantly affects risk
+            label = prediction["label"]
+            color = prediction["color"]
+            
+            if adjusted_safety_score < 45 and base_score >= 45:
+                # Time made it risky
+                label = "Caution"
+                color = "#f59e0b"
+            elif adjusted_safety_score < 25 and base_score >= 25:
+                label = "High Risk"
+                color = "#ef4444"
+            
+            # Build explanation with time context
+            explanation = prediction["explanation"][:]
+            hour = timestamp.hour
+            if hour >= 22 or hour < 6:
+                explanation.append("Night time increases risk")
+            if 7 <= hour <= 10 or 18 <= hour <= 21:
+                explanation.append("Rush hour crowd impact")
             
             result = {
                 "latitude": latitude,
                 "longitude": longitude,
-                "safety_score": adjusted_safety_score,
-                "label": prediction["label"],
-                "color": prediction["color"],
+                "safety_score": round(adjusted_safety_score, 1),
+                "label": label,
+                "color": color,
                 "confidence": prediction["confidence"],
-                "explanation": prediction["explanation"],
+                "explanation": explanation,
                 "probability_safe": prediction["probability_safe"],
                 "probability_caution": prediction["probability_caution"],
                 "probability_high_risk": prediction["probability_high_risk"],
                 "crime_density": prediction["crime_density"],
-                "timestamp": format_timestamp(timestamp) if timestamp else None,
+                "crime_density_norm": crime_density_norm,
+                "timestamp": format_timestamp(timestamp),
                 "time_features": time_features,
                 "is_fallback": False,
             }
@@ -130,8 +148,9 @@ class SafetyAnalysisService:
         Uses spatial interpolation to compute features, not pre-computed crime values.
         """
         try:
-            if not self.model.is_trained:
-                raise ValueError("Model not trained")
+            # Ensure timestamp is not None
+            if timestamp is None:
+                timestamp = datetime.now()
             
             if len(waypoints) < 2:
                 raise ValueError("Route must have at least 2 waypoints")
@@ -144,7 +163,6 @@ class SafetyAnalysisService:
                     length_m=100.0,
                     name=wp.get("name", f"Point {i+1}"),
                     crime_density_norm=0.0,  # Not used with new extractor
-                    timestamp=wp.get("timestamp", timestamp),  # Use waypoint timestamp or route timestamp
                 )
                 segments.append(segment)
             
@@ -153,10 +171,11 @@ class SafetyAnalysisService:
             
             return {
                 "route_name": route_name,
-                "safety_score": analysis.safety_score,
+                "safety_score": round(analysis.safety_score, 1),
                 "category": analysis.category,
                 "color": analysis.color,
                 "summary": analysis.summary,
+                "timestamp": format_timestamp(timestamp),
                 "total_segments": len(analysis.segments),
                 "high_risk_segments": len(analysis.high_risk_segments),
                 "high_risk_percentage": (
@@ -170,7 +189,7 @@ class SafetyAnalysisService:
                         "latitude": seg["lat"],
                         "longitude": seg["lon"],
                         "length_m": seg["length_m"],
-                        "safety_score": seg["safety_score"],
+                        "safety_score": round(seg["safety_score"], 1),
                         "label": seg["label"],
                         "color": seg["color"],
                         "explanation": seg["explanation"],
@@ -184,8 +203,7 @@ class SafetyAnalysisService:
         except Exception as e:
             logger.error(f"Error in analyze_route: {str(e)}")
             # Return fallback with approximation
-            approx_safety = 50.0  # Safe default
-            
+            approx_safety = 50.0
             category, color = "Caution", "#f59e0b"
             
             return {
@@ -194,31 +212,52 @@ class SafetyAnalysisService:
                 "category": category,
                 "color": color,
                 "summary": f"{category} - Fallback calculation",
-                "total_segments": len(waypoints),
+                "timestamp": format_timestamp(timestamp if timestamp else datetime.now()),
+                "total_segments": len(waypoints) if waypoints else 0,
+                "high_risk_segments": 0,
+                "high_risk_percentage": 0.0,
+                "segment_details": [],
                 "recommendations": ["Route analysis failed, use fallback estimate"],
+                "processing_time_ms": 0.0,
                 "is_fallback": True,
             }
     
     def analyze_multiple_locations(self, locations: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Analyze safety of multiple locations."""
-        if not self.model.is_trained:
-            raise ValueError("Model not trained")
-        
-        results = []
-        high_risk_count = 0
-        
-        for location in locations:
-            result = self.analyze_location(
-                latitude=location["latitude"],
-                longitude=location["longitude"],
-            )
-            results.append(result)
+        try:
+            results = []
+            high_risk_count = 0
             
-            if result["label"] == "High Risk":
-                high_risk_count += 1
-        
-        return {
-            "count": len(results),
-            "results": results,
-            "high_risk_count": high_risk_count,
-        }
+            for location in locations:
+                try:
+                    result = self.analyze_location(
+                        latitude=location["latitude"],
+                        longitude=location["longitude"],
+                        timestamp=location.get("timestamp"),
+                        crime_density_norm=location.get("crime_density_norm", 0.5),
+                    )
+                    results.append(result)
+                    
+                    if result["label"] == "High Risk":
+                        high_risk_count += 1
+                except Exception as e:
+                    logger.error(f"Error analyzing location: {str(e)}")
+                    # Add fallback for this location
+                    results.append(_get_fallback_result(
+                        location.get("latitude", 0),
+                        location.get("longitude", 0),
+                        location.get("crime_density_norm", 0.5)
+                    ))
+            
+            return {
+                "count": len(results),
+                "results": results,
+                "high_risk_count": high_risk_count,
+            }
+        except Exception as e:
+            logger.error(f"Error in analyze_multiple_locations: {str(e)}")
+            return {
+                "count": 0,
+                "results": [],
+                "high_risk_count": 0,
+            }

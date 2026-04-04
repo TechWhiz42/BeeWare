@@ -15,9 +15,6 @@ FEATURE_NAMES = [
     "population_density",
     "road_density",
     "visibility_score",
-    "isolation_score",
-    "activity_score",
-    "env_risk",
 ]
 
 
@@ -60,7 +57,7 @@ class BeeWareRiskModel:
 
         n_rows = len(df)
         if n_rows < 1000:
-            print(f"⚠️  WARNING: Dataset has {n_rows} rows (recommended >= 1000)")
+            print(f"WARNING: Dataset has {n_rows} rows (recommended >= 1000)")
             print(f"   Small dataset may lead to overfitting")
 
         X = df[FEATURE_NAMES].values
@@ -91,13 +88,13 @@ class BeeWareRiskModel:
         from sklearn.metrics import classification_report, confusion_matrix
         auc = roc_auc_score(y_test, y_proba, multi_class="ovr")
         
-        print(f"\n📊 Test Set Performance:")
+        print(f"\nTest Set Performance:")
         print(f"   AUC: {auc:.4f}")
         if auc > 0.98:
-            print(f"   ⚠️  WARNING: AUC {auc:.4f} > 0.98 (possible overfitting)")
+            print(f"   WARNING: AUC {auc:.4f} > 0.98 (possible overfitting)")
 
         # Cross-validation on full dataset
-        print(f"\n🔄 Cross-Validation (5-fold on full dataset):")
+        print(f"\nCross-Validation (5-fold on full dataset):")
         cv_scores = cross_val_score(
             self.build_pipeline(), X, y, 
             cv=5, scoring='roc_auc_ovr', n_jobs=-1
@@ -105,7 +102,7 @@ class BeeWareRiskModel:
         print(f"   Fold scores: {[round(s, 4) for s in cv_scores]}")
         print(f"   Mean: {cv_scores.mean():.4f} (+/- {cv_scores.std():.4f})")
         if cv_scores.std() > 0.15:
-            print(f"   ⚠️  WARNING: High variance across folds (possible instability)")
+            print(f"   WARNING: High variance across folds (possible instability)")
 
         # Class balance
         unique, counts = np.unique(y, return_counts=True)
@@ -113,10 +110,10 @@ class BeeWareRiskModel:
         min_class = counts.min()
         imbalance_ratio = max_class / min_class
         if imbalance_ratio > 2.0:
-            print(f"\n⚠️  WARNING: Class imbalance ratio {imbalance_ratio:.2f} (max/min: {max_class}/{min_class})")
+            print(f"\nWARNING: Class imbalance ratio {imbalance_ratio:.2f} (max/min: {max_class}/{min_class})")
 
         # Detailed classification report
-        print(f"\n📋 Classification Report:")
+        print(f"\nClassification Report:")
         print(classification_report(y_test, y_pred, target_names=["Safe", "Caution", "High Risk"]))
 
         self.training_metrics = {
@@ -131,7 +128,7 @@ class BeeWareRiskModel:
         }
 
         self.is_trained = True
-        print(f"\n✅ Model trained and saved successfully")
+        print(f"\nModel trained and saved successfully")
         return self
 
     def save(self, path="beeware_model.pkl"):
@@ -158,99 +155,101 @@ class BeeWareRiskModel:
 
     def predict_segment(self, features):
         """
-        Predict risk for a segment using production-ready formula.
+        Predict risk for a segment using deterministic formula.
         
-        Feature vector (7 features):
+        Feature vector (4 features):
         0: crime_density
         1: population_density
         2: road_density
         3: visibility_score
-        4: isolation_score
-        5: activity_score
-        6: env_risk
         """
-        if not self.is_trained:
-            raise ValueError("Model not trained")
-
-        if len(features) != len(FEATURE_NAMES):
-            raise ValueError(f"Feature vector must have {len(FEATURE_NAMES)} values, got {len(features)}")
+        if len(features) != 4:
+            raise ValueError(f"Feature vector must have 4 values, got {len(features)}")
 
         # Extract features by index
-        crime_density = features[0]
-        population_density = features[1]
-        road_density = features[2]
-        visibility_score = features[3]
-        isolation_score = features[4]
-        activity_score = features[5]
-        env_risk = features[6]
+        crime_density = float(features[0])
+        population_density = float(features[1])
+        road_density = float(features[2])
+        visibility_score = float(features[3])
         
         # Validation
-        assert 0.0 <= crime_density <= 1.0, \
-            f"crime_density {crime_density} not in valid range [0, 1]"
-        assert np.all(features >= 0) and np.all(features <= 1), \
-            f"Feature vector values out of range [0, 1]: {features}"
+        assert 0.0 <= crime_density <= 1.0, f"crime_density {crime_density} not in [0,1]"
+        assert np.all(features >= 0) and np.all(features <= 1), f"Features out of range [0,1]: {features}"
         
-        x = features.reshape(1, -1)
-        pred = int(self.model.predict(x)[0])
-        probs = self.model.predict_proba(x)[0]
+        # === DETERMINISTIC SAFETY SCORE FORMULA ===
+        # risk = (0.6 * crime_density + 
+        #         0.15 * (1 - visibility_score) + 
+        #         0.15 * (1 - road_density) + 
+        #         0.10 * (1 - population_density))
         
-        # Extract probabilities for each class
-        p_safe = probs[0]
-        p_caution = probs[1]
-        p_high_risk = probs[2]
-
-        # === PRODUCTION-GRADE SAFETY SCORE FORMULA ===
+        risk = (
+            0.6 * crime_density +
+            0.15 * (1.0 - visibility_score) +
+            0.15 * (1.0 - road_density) +
+            0.10 * (1.0 - population_density)
+        )
         
-        # Step 1: Model Risk (weighted probability)
-        model_risk = (0.3 * p_caution) + (0.9 * p_high_risk)
+        # Clamp risk to [0, 1]
+        risk = max(0.0, min(1.0, risk))
         
-        # Step 2: Crime Effect (non-linear amplification)
-        crime_effect = crime_density ** 1.2
+        # Convert to safety score [0, 100]
+        safety_score = 100.0 * (1.0 - risk)
+        safety_score = max(0.0, min(100.0, safety_score))
         
-        # Step 3: Combine Risk (probabilistic fusion, no double counting)
-        final_risk = 1 - (1 - model_risk) * (1 - crime_effect)
+        # Determine risk class based on safety score
+        if safety_score >= 70:
+            risk_class = 0  # Safe
+            label = "Safe"
+            color = "#22c55e"
+        elif safety_score >= 45:
+            risk_class = 1  # Caution
+            label = "Caution"
+            color = "#f59e0b"
+        else:
+            risk_class = 2  # High Risk
+            label = "High Risk"
+            color = "#ef4444"
         
-        # Step 4: Apply environmental risk modifier
-        final_risk = final_risk + env_risk * (1 - final_risk)
+        # Confidence (based on feature extremity)
+        extremity = max(
+            abs(crime_density - 0.5) * 2,
+            abs(visibility_score - 0.5) * 2,
+            abs(road_density - 0.5) * 2
+        )
+        confidence = float(min(0.95, 0.5 + extremity * 0.5))
         
-        # Step 5: Convert to safety score
-        final_risk = np.clip(final_risk, 0.0, 1.0)
-        safety_score = 100 * (1 - (final_risk ** 0.85))
-        safety_score = max(0.0, min(100.0, float(safety_score)))
-        
-        # Confidence Score: based on probability entropy
-        # High entropy (uncertain) = low confidence
-        # Low entropy (certain) = high confidence
-        entropy = -np.sum(probs * np.log(probs + 1e-10))
-        max_entropy = np.log(3)  # 3 classes
-        confidence = float(1 - (entropy / max_entropy))
-        confidence = max(0.0, min(1.0, confidence))
+        # Dummy probabilities for compatibility
+        probabilities = [
+            1.0 - (risk * 1.5) if risk_class == 0 else 0.2,
+            0.4 if risk_class == 1 else 0.3,
+            risk if risk_class == 2 else 0.2
+        ]
+        probabilities = [max(0.0, min(1.0, p)) for p in probabilities]
+        total = sum(probabilities)
+        if total > 0:
+            probabilities = [p / total for p in probabilities]
+        else:
+            probabilities = [1.0/3, 1.0/3, 1.0/3]
         
         # Build explanation from key factors
         explanation = self._build_explanation(
             safety_score=safety_score,
             crime_density=crime_density,
             visibility_score=visibility_score,
-            isolation_score=isolation_score,
-            activity_score=activity_score,
-            env_risk=env_risk,
-            p_high_risk=p_high_risk,
+            road_density=road_density,
+            population_density=population_density,
         )
         
-        # Determine risk category
-        label = ["Safe", "Caution", "High Risk"][pred]
-        color = ["#22c55e", "#f59e0b", "#ef4444"][pred]
-
         return {
-            "risk_class": pred,
+            "risk_class": risk_class,
             "label": label,
             "color": color,
             "safety_score": float(safety_score),
             "confidence": float(round(confidence, 3)),
             "explanation": explanation,
-            "probability_safe": float(p_safe),
-            "probability_caution": float(p_caution),
-            "probability_high_risk": float(p_high_risk),
+            "probability_safe": float(probabilities[0]),
+            "probability_caution": float(probabilities[1]),
+            "probability_high_risk": float(probabilities[2]),
             "crime_density": float(crime_density),
             "model_metrics": self.training_metrics
         }
@@ -259,10 +258,8 @@ class BeeWareRiskModel:
                           safety_score: float,
                           crime_density: float,
                           visibility_score: float,
-                          isolation_score: float,
-                          activity_score: float,
-                          env_risk: float,
-                          p_high_risk: float) -> list:
+                          road_density: float,
+                          population_density: float) -> list:
         """
         Build human-readable explanation of risk factors.
         
@@ -278,29 +275,23 @@ class BeeWareRiskModel:
         elif crime_density > 0.40:
             factors.append("Moderate crime area")
         
-        # Visibility (lighting/night_light_intensity)
+        # Visibility (lighting)
         if visibility_score < 0.30:
-            factors.append("Low visibility (poor lighting)")
+            factors.append("Low visibility increases risk")
         elif visibility_score > 0.70:
             factors.append("Good visibility")
         
-        # Isolation vs Urban activity
-        if isolation_score > 0.70:
-            factors.append("Isolated location")
-        elif activity_score > 0.70:
-            factors.append("High urban activity")
+        # Road connectivity
+        if road_density < 0.30:
+            factors.append("Poor road connectivity")
+        elif road_density > 0.70:
+            factors.append("Better road connectivity improves safety")
         
-        # Environmental risk composite
-        if env_risk > 0.70:
-            factors.append("Unfavorable environmental conditions")
-        elif env_risk < 0.30:
-            factors.append("Favorable environmental conditions")
-        
-        # Model's high-risk prediction
-        if p_high_risk > 0.60:
-            factors.append("Model confidence: High risk")
-        elif p_high_risk < 0.20:
-            factors.append("Model confidence: Safe")
+        # Population density
+        if population_density < 0.30:
+            factors.append("Low population density")
+        elif population_density > 0.70:
+            factors.append("High population density area")
         
         # If no specific factors, add general assessment
         if not factors:

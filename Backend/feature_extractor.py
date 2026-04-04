@@ -4,20 +4,16 @@ Production-Ready Feature Extractor
 Implements realistic spatial interpolation using k-NN and inverse distance weighting.
 No synthetic features, no time dependency.
 
-Feature Vector (7 features, all normalized [0,1]):
+Feature Vector (4 features, all normalized [0,1]):
 1. crime_density - weighted spatial interpolation from area_features
 2. population_density - weighted spatial interpolation from area_features
 3. road_density - weighted spatial interpolation from area_features
 4. visibility_score - night_light_intensity from area_features
-5. isolation_score - composite of population & road density
-6. activity_score - composite of population & road density
-7. env_risk - composite environmental risk score
 """
 
 import math
 import numpy as np
 from typing import List, Tuple, Dict, Optional
-from risk_model import FEATURE_NAMES
 
 
 def haversine_distance(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -89,39 +85,20 @@ class FeatureExtractor:
         road_density = self._normalize(road_density, 0.0, 1.0)
         visibility_score = self._normalize(visibility_score, 0.0, 1.0)
         
-        # Derived features
-        isolation_score = 1.0 - (0.5 * population_density + 0.5 * road_density)
-        isolation_score = np.clip(isolation_score, 0.0, 1.0)
-        
-        activity_score = 0.6 * population_density + 0.4 * road_density
-        activity_score = np.clip(activity_score, 0.0, 1.0)
-        
-        # Environmental risk composite
-        env_risk = (
-            0.4 * isolation_score +
-            0.3 * (1.0 - visibility_score) +
-            0.3 * (1.0 - activity_score)
-        )
-        env_risk = np.clip(env_risk, 0.0, 1.0)
-        
-        # Build feature vector [crime_density, population_density, road_density, 
-        #                        visibility_score, isolation_score, activity_score, env_risk]
+        # Build feature vector [crime_density, population_density, road_density, visibility_score]
         features = np.array([
             crime_density,
             population_density,
             road_density,
             visibility_score,
-            isolation_score,
-            activity_score,
-            env_risk,
         ], dtype=np.float32)
         
         # Ensure all values in [0,1]
         features = np.clip(features, 0.0, 1.0)
         
         # Validate
-        assert len(features) == len(FEATURE_NAMES), \
-            f"Feature vector length {len(features)} != expected {len(FEATURE_NAMES)}"
+        assert len(features) == 4, \
+            f"Feature vector length {len(features)} != expected 4"
         assert np.all(features >= 0) and np.all(features <= 1), \
             f"Feature values out of range [0,1]: {features}"
         
@@ -191,7 +168,7 @@ class FeatureExtractor:
     
     def _get_default_features(self) -> np.ndarray:
         """Return default feature vector when no area data available."""
-        return np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5], dtype=np.float32)
+        return np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
     
     @staticmethod
     def create_from_database(db_records: List[Dict]) -> "FeatureExtractor":

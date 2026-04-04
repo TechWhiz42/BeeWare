@@ -14,11 +14,40 @@ from validators import (
     validate_latitude, validate_longitude, validate_crime_density,
     ValidationError, get_crime_density
 )
+from database import AREA_COORDINATES, CRIME_STATS, normalize_crime_density
 
 logger = logging.getLogger(__name__)
 
+
+def _create_area_features():
+    """
+    Create area features from database coordinates and crime data.
+    Returns list of dicts with geocoded features for spatial interpolation.
+    """
+    area_features = []
+    
+    for area_id, (latitude, longitude) in AREA_COORDINATES.items():
+        crime_count = CRIME_STATS.get(area_id, 0)
+        crime_density = normalize_crime_density(crime_count)
+        
+        # Create realistic synthetic features based on area properties
+        # In a production system, these would come from actual data sources
+        area_features.append({
+            "latitude": latitude,
+            "longitude": longitude,
+            "crime_score": crime_density,
+            "population_density": 0.6,  # Moderate population across Lucknow
+            "road_density": 0.7,  # Good road infrastructure
+            "night_light_intensity": 0.65,  # Urban night lighting
+        })
+    
+    return area_features
+
+
 model = BeeWareRiskModel()
-extractor = FeatureExtractor()
+# Initialize extractor with area features from database
+area_features = _create_area_features()
+extractor = FeatureExtractor(area_features=area_features)
 analyzer = RouteAnalyzer(model, extractor)
 service = SafetyAnalysisService(model, extractor, analyzer)
 
@@ -160,14 +189,8 @@ def analyze_location_safety(request: LocationRequest):
     - longitude: float [-180, 180]
     - timestamp: datetime
     
-    Crime density is automatically fetched from database.
+    Returns safety assessment with or without trained model (uses fallback if needed).
     """
-    if not model.is_trained:
-        raise HTTPException(
-            status_code=503,
-            detail="Model not trained. Call /admin/train first."
-        )
-    
     try:
         crime = get_crime_density(request.latitude, request.longitude)
         
@@ -195,14 +218,8 @@ def analyze_route_safety(request: RouteRequest):
     - timestamp: datetime
     - name: optional str
     
-    Crime density is automatically fetched per waypoint.
+    Returns route safety assessment with or without trained model (uses fallback if needed).
     """
-    if not model.is_trained:
-        raise HTTPException(
-            status_code=503,
-            detail="Model not trained. Call /admin/train first."
-        )
-    
     try:
         waypoints_data = []
         for wp in request.waypoints:
@@ -240,14 +257,8 @@ def analyze_multiple_locations(request: BulkLocationRequest):
     - longitude: float [-180, 180]
     - timestamp: datetime
     
-    Crime density is automatically fetched per location.
+    Returns bulk analysis with or without trained model (uses fallback if needed).
     """
-    if not model.is_trained:
-        raise HTTPException(
-            status_code=503,
-            detail="Model not trained. Call /admin/train first."
-        )
-    
     try:
         locations_data = []
         for loc in request.locations:
