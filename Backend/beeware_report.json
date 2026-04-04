@@ -1,0 +1,87 @@
+{
+  "Delhi_Safe_Morning": {
+    "safety_score": 100.0,
+    "category": "Safe",
+    "color": "#22c55e",
+    "summary": "\ud83d\udfe2 Safe route | Score: 100.0/100 | 0/5 high-risk segments (0.0%) | Analyzed for 08:30 (morning)",
+    "recommendations": [
+      "Route appears safe for travel at this time.",
+      "Stay aware of your surroundings as always.",
+      "Keep your phone charged and share your location with someone trusted."
+    ],
+    "high_risk_segments": [],
+    "segment_scores": [
+      100.0,
+      100.0,
+      100.0,
+      100.0,
+      100.0
+    ],
+    "timestamp": "2024-03-15T08:30:00",
+    "processing_time_ms": 4557.1
+  },
+  "Delhi_Risky_Night": {
+    "safety_score": 13.7,
+    "category": "Avoid",
+    "color": "#ef4444",
+    "summary": "\ud83d\udd34 Avoid route | Score: 13.7/100 | 2/5 high-risk segments (40.0%) | Analyzed for 23:45 (night)",
+    "recommendations": [
+      "\u26a0\ufe0f  This route has significant safety concerns at this time.",
+      "Strongly consider an alternative route or travel mode.",
+      "If you must travel: inform someone of your route and ETA.",
+      "Stay in well-lit, populated areas as much as possible.",
+      "Keep local emergency number (100/112) ready.",
+      "Consider using verified cab services over walking."
+    ],
+    "high_risk_segments": [
+      {
+        "index": 1,
+        "name": "Point 2",
+        "lat": 28.5841,
+        "lon": 77.2428,
+        "safety_score": 6.8,
+        "label": "High Risk",
+        "color": "#ef4444"
+      },
+      {
+        "index": 2,
+        "name": "Point 3",
+        "lat": 28.5789,
+        "lon": 77.2372,
+        "safety_score": 5.9,
+        "label": "High Risk",
+        "color": "#ef4444"
+      }
+    ],
+    "segment_scores": [
+      26.9,
+      6.8,
+      5.9,
+      29.2,
+      52.7
+    ],
+    "timestamp": "2024-03-15T23:45:00",
+    "processing_time_ms": 4399.2
+  },
+  "Mumbai_College_Evening": {
+    "safety_score": 79.3,
+    "category": "Safe",
+    "color": "#22c55e",
+    "summary": "\ud83d\udfe2 Safe route | Score: 79.3/100 | 0/5 high-risk segments (0.0%) | Analyzed for 19:15 (evening)",
+    "recommendations": [
+      "Route appears safe for travel at this time.",
+      "Stay aware of your surroundings as always.",
+      "Keep your phone charged and share your location with someone trusted."
+    ],
+    "high_risk_segments": [],
+    "segment_scores": [
+      82.6,
+      82.4,
+      82.4,
+      68.7,
+      82.6
+    ],
+    "timestamp": "2024-03-15T19:15:00",
+    "processing_time_ms": 4401.6
+  }
+}
