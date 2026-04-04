@@ -3,9 +3,13 @@ import os
 
 db_path = "crime_local.db"
 
-# Remove existing database if it exists
-if os.path.exists(db_path):
-    os.remove(db_path)
+# Try to remove existing database if it exists
+try:
+    if os.path.exists(db_path):
+        os.remove(db_path)
+except PermissionError:
+    print(f"Note: Could not delete {db_path} - it's currently in use")
+    print("Creating new database or using existing one...")
 
 connection = sqlite3.connect(db_path)
 cursor = connection.cursor()
@@ -41,6 +45,18 @@ CREATE TABLE area_crime_summary (
     id INTEGER PRIMARY KEY,
     total_crimes INTEGER,
     area_id INTEGER
+)
+''')
+
+# Create points_of_interest table (police stations and hospitals)
+cursor.execute('''
+CREATE TABLE points_of_interest (
+    id INTEGER PRIMARY KEY,
+    latitude REAL,
+    longitude REAL,
+    poi_type INTEGER,
+    name TEXT,
+    distance_influence_km REAL
 )
 ''')
 
@@ -127,6 +143,27 @@ features_data = [
 
 cursor.executemany('INSERT INTO area_features VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', features_data)
 
+print("Inserting points of interest (police stations and hospitals)...")
+# POI data: (latitude, longitude, type, name, distance_influence_km)
+# type: 0 = Police Station, 1 = Hospital
+pois_data = [
+    # Police Stations in Lucknow
+    (26.8469, 80.9460, 0, "Gomti Nagar Police Station", 2.0),
+    (26.8361, 80.9146, 0, "Charbagh Police Station", 2.0),
+    (26.8631, 80.9355, 0, "Nishatganj Police Station", 2.0),
+    (26.8660, 80.9215, 0, "Indira Nagar Police Station", 2.0),
+    (26.8398, 80.9075, 0, "Aminabad Police Station", 2.0),
+    
+    # Hospitals in Lucknow
+    (26.8460, 80.9450, 1, "Lucknow Medical College Hospital", 2.0),
+    (26.8640, 80.9340, 1, "Sahara Hospital", 2.0),
+    (26.8370, 80.9150, 1, "Balrampur Hospital", 2.0),
+    (26.8500, 80.9200, 1, "KGMU Medical University Hospital", 2.0),
+    (26.8300, 80.9000, 1, "City Nursing Home", 2.0),
+]
+
+cursor.executemany('INSERT INTO points_of_interest VALUES (NULL, ?, ?, ?, ?, ?)', pois_data)
+
 connection.commit()
 print(f"Database created successfully at {db_path}")
 
@@ -134,5 +171,9 @@ print(f"Database created successfully at {db_path}")
 cursor.execute('SELECT COUNT(*) FROM area_features')
 count = cursor.fetchone()[0]
 print(f"Total feature records: {count}")
+
+cursor.execute('SELECT COUNT(*) FROM points_of_interest')
+poi_count = cursor.fetchone()[0]
+print(f"Total POI records: {poi_count}")
 
 connection.close()

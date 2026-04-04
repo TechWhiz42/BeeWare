@@ -24,11 +24,19 @@ class FeatureExtractor:
     K_NEIGHBORS = 8
     MAX_DISTANCE_KM = 5.0
     
-    def __init__(self, area_features: Optional[List[Dict]] = None):
+    def __init__(self, area_features: Optional[List[Dict]] = None, pois: Optional[List[Dict]] = None):
         self.area_features = area_features or []
+        self.pois = pois or []  # Points of Interest (police, hospitals)
         
     def set_area_features(self, area_features: List[Dict]):
         self.area_features = area_features
+    
+    def set_pois(self, pois: List[Dict]):
+        """Set points of interest (police stations, hospitals).
+        POI dict should have: {"latitude", "longitude", "type", "name"}
+        type: 0 = Police Station, 1 = Hospital
+        """
+        self.pois = pois
     
     def extract(self, lat: float, lon: float, segment_length_m: float = 100.0) -> np.ndarray:
         neighbors = self._find_nearest_neighbors(lat, lon, self.K_NEIGHBORS)
@@ -62,6 +70,70 @@ class FeatureExtractor:
             f"Feature values out of range [0,1]: {features}"
         
         return features
+    
+    def calculate_poi_boost(self, lat: float, lon: float) -> dict:
+        """Calculate proximity boost from police stations and hospitals.
+        
+        Returns:
+            dict with keys:
+            - "has_police_nearby": bool (within 2km)
+            - "has_hospital_nearby": bool (within 2km)
+            - "proximity_boost": float (0.0-0.3) additive to survivability
+            - "closest_police_dist_km": float or None
+            - "closest_hospital_dist_km": float or None
+        """
+        if not self.pois:
+            return {
+                "has_police_nearby": False,
+                "has_hospital_nearby": False,
+                "proximity_boost": 0.0,
+                "closest_police_dist_km": None,
+                "closest_hospital_dist_km": None,
+            }
+        
+        police_distances = []
+        hospital_distances = []
+        
+        for poi in self.pois:
+            dist = haversine_distance(
+                lat, lon,
+                poi["latitude"], poi["longitude"]
+            )
+            
+            if poi["type"] == 0:  # Police
+                police_distances.append(dist)
+            elif poi["type"] == 1:  # Hospital
+                hospital_distances.append(dist)
+        
+        closest_police = min(police_distances) if police_distances else None
+        closest_hospital = min(hospital_distances) if hospital_distances else None
+        
+        has_police = closest_police is not None and closest_police <= 2.0
+        has_hospital = closest_hospital is not None and closest_hospital <= 2.0
+        
+        # Calculate boost: closer = stronger boost
+        boost = 0.0
+        
+        if has_police:
+            # Police within 2km: +15 points base (more protective)
+            police_boost = 15.0 * (1.0 - closest_police / 2.0)  # 15 at 0km, 0 at 2km
+            boost += police_boost
+        
+        if has_hospital:
+            # Hospital within 2km: +15 points base (emergency services)
+            hospital_boost = 15.0 * (1.0 - closest_hospital / 2.0)  # 15 at 0km, 0 at 2km
+            boost += hospital_boost
+        
+        # Cap at 30 total points
+        boost = min(30.0, boost)
+        
+        return {
+            "has_police_nearby": has_police,
+            "has_hospital_nearby": has_hospital,
+            "proximity_boost": boost,
+            "closest_police_dist_km": closest_police,
+            "closest_hospital_dist_km": closest_hospital,
+        }
     
     def _find_nearest_neighbors(self, lat: float, lon: float, k: int) -> List[Tuple[int, float, Dict]]:
         if not self.area_features:

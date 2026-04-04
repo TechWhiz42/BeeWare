@@ -25,6 +25,18 @@ class AreaFeature(Base):
     risk_score = Column(Float)
 
 
+class PointOfInterest(Base):
+    """Police stations, hospitals, and other emergency services."""
+    __tablename__ = "points_of_interest"
+
+    id = Column(Integer, primary_key=True)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    poi_type = Column(Integer)  # 0: Police Station, 1: Hospital
+    name = Column(Integer)  # Store as string representation
+    distance_influence_km = Column(Float, default=2.0)  # Influence radius
+
+
 # -------------------------
 # DISTANCE FUNCTION
 # -------------------------

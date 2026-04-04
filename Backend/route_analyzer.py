@@ -99,6 +99,9 @@ class RouteAnalyzer:
                     lon=seg.lon,
                     segment_length_m=seg.length_m,
                 )
+                
+                # Calculate POI proximity boost (police stations, hospitals)
+                poi_info = self.extractor.calculate_poi_boost(seg.lat, seg.lon)
 
                 # Validate feature vector (should be 4 features)
                 assert len(seg.features) == 4, \
@@ -108,7 +111,10 @@ class RouteAnalyzer:
                     f"Segment {i} features out of range [0,1]: {seg.features}"
 
                 # Get prediction
-                seg.risk_result = self.model.predict_segment(seg.features)
+                seg.risk_result = self.model.predict_segment(
+                    seg.features,
+                    poi_boost=poi_info.get("proximity_boost", 0.0)
+                )
                 score = seg.risk_result["safety_score"]
                 
                 # Apply time-based risk adjustment
@@ -130,8 +136,14 @@ class RouteAnalyzer:
                     "lon": seg.lon,
                     "length_m": seg.length_m,
                     "safety_score": adjusted_score,
+                    "survivability_score": seg.risk_result["survivability_score"],
+                    "crime_impact_score": seg.risk_result["crime_impact_score"],
                     "label": seg.risk_result["label"],
                     "color": seg.risk_result["color"],
+                    "has_police_nearby": poi_info.get("has_police_nearby", False),
+                    "has_hospital_nearby": poi_info.get("has_hospital_nearby", False),
+                    "closest_police_dist_km": poi_info.get("closest_police_dist_km"),
+                    "closest_hospital_dist_km": poi_info.get("closest_hospital_dist_km"),
                     "explanation": explanation,
                 }
                 segment_results.append(seg_info)
@@ -154,8 +166,14 @@ class RouteAnalyzer:
                     "lon": seg.lon,
                     "length_m": seg.length_m,
                     "safety_score": fallback_score,
+                    "survivability_score": 70.0,
+                    "crime_impact_score": 20.0,
                     "label": "Caution",
                     "color": "#f59e0b",
+                    "has_police_nearby": False,
+                    "has_hospital_nearby": False,
+                    "closest_police_dist_km": None,
+                    "closest_hospital_dist_km": None,
                     "explanation": ["Analysis failed for this segment"],
                 }
                 segment_results.append(seg_info)

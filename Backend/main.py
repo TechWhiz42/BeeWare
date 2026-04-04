@@ -47,6 +47,29 @@ def _load_area_features_from_db():
     return area_features
 
 
+def _load_pois_from_db():
+    """Load Points of Interest (police stations, hospitals) from database."""
+    from database import SessionLocal, PointOfInterest
+    
+    session = SessionLocal()
+    try:
+        pois = session.query(PointOfInterest).all()
+        return [
+            {
+                "latitude": p.latitude,
+                "longitude": p.longitude,
+                "type": p.poi_type,  # 0: Police, 1: Hospital
+                "name": p.name,
+            }
+            for p in pois
+        ]
+    except Exception as e:
+        logger.warning(f"No POI table found or error loading POIs: {e}")
+        return []
+    finally:
+        session.close()
+
+
 model = BeeWareRiskModel()
 extractor = FeatureExtractor()
 analyzer = RouteAnalyzer(model, extractor)
@@ -67,6 +90,16 @@ async def lifespan(app: FastAPI):
         logger.info(f"Initialized feature extractor with {len(area_features)} area features")
     except Exception as e:
         logger.error(f"Failed to initialize extractor with database features: {e}")
+    
+    try:
+        pois = _load_pois_from_db()
+        extractor.set_pois(pois)
+        if pois:
+            logger.info(f"Initialized POI data with {len(pois)} points of interest")
+        else:
+            logger.info(f"No POI data available (optional)")
+    except Exception as e:
+        logger.warning(f"Failed to load POI data: {e}")
     
     yield
 
@@ -123,6 +156,8 @@ class LocationResponse(BaseModel):
     latitude: float
     longitude: float
     safety_score: float
+    survivability_score: float
+    crime_impact_score: float
     label: str
     color: str
     probability_safe: float
@@ -152,6 +187,8 @@ class SegmentDetail(BaseModel):
     latitude: float
     longitude: float
     safety_score: float
+    survivability_score: float
+    crime_impact_score: float
     label: str
     color: str
     explanation: str

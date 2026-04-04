@@ -13,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 def _get_fallback_result(latitude: float, longitude: float, crime: float) -> Dict[str, Any]:
     approx_safety = max(0.0, min(100.0, 100 - (crime * 70)))
+    approx_survivability = max(0.0, min(100.0, 95 - (crime * 20)))
+    approx_crime_impact = approx_survivability - approx_safety
     
     if approx_safety >= 70:
         label, color = "Safe", "#22c55e"
@@ -25,6 +27,8 @@ def _get_fallback_result(latitude: float, longitude: float, crime: float) -> Dic
         "latitude": latitude,
         "longitude": longitude,
         "safety_score": round(approx_safety, 1),
+        "survivability_score": round(approx_survivability, 1),
+        "crime_impact_score": round(approx_crime_impact, 1),
         "label": label,
         "color": color,
         "probability_safe": max(0.0, approx_safety / 100),
@@ -112,6 +116,8 @@ class SafetyAnalysisService:
                 "latitude": latitude,
                 "longitude": longitude,
                 "safety_score": round(adjusted_safety_score, 1),
+                "survivability_score": round(prediction["survivability_score"], 1),
+                "crime_impact_score": round(prediction["crime_impact_score"], 1),
                 "label": label,
                 "color": color,
                 "confidence": prediction["confidence"],
@@ -174,6 +180,8 @@ class SafetyAnalysisService:
                         "longitude": seg["lon"],
                         "length_m": seg["length_m"],
                         "safety_score": round(seg["safety_score"], 1),
+                        "survivability_score": round(seg["survivability_score"], 1),
+                        "crime_impact_score": round(seg["crime_impact_score"], 1),
                         "label": seg["label"],
                         "color": seg["color"],
                         "explanation": seg["explanation"],

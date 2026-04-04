@@ -175,16 +175,18 @@ class BeeWareRiskModel:
             self.is_trained = False
             return self
 
-    def predict_segment(self, features, timestamp: datetime = None):
+    def predict_segment(self, features, timestamp: datetime = None, poi_boost: float = 0.0):
         """
         Predict risk score using trained ML model.
+        Separates survivability (non-crime factors) from crime impact.
         
         Args:
             features: [crime_score, pop_density_norm, road_density, night_light_norm]
             timestamp: datetime object (for time-based context)
+            poi_boost: Survivability boost from nearby police/hospitals (0-30 points)
         
         Returns:
-            Dict with safety_score, label, color, confidence, explanation
+            Dict with safety_score, survivability_score, crime_score, label, color, etc.
         """
         if not self.is_trained or self.model is None:
             raise RuntimeError("Model not trained. Call train_from_excel() first.")
@@ -198,16 +200,33 @@ class BeeWareRiskModel:
             if not (0.0 <= f <= 1.0):
                 raise ValueError(f"Feature '{self.feature_names[i]}' out of range [0,1]: {f}")
         
+        crime_score = features[0]
+        pop_density = features[1]
+        road_density = features[2]
+        visibility = features[3]
+        
         # Prepare input for prediction
         X = np.array([features])
         X_scaled = self.scaler.transform(X)
         
-        # Predict risk score using trained model
+        # Predict risk score using trained model (with crime)
         risk_score = float(self.model.predict(X_scaled)[0])
         risk_score = np.clip(risk_score, 0.0, 1.0)
         
-        # Convert risk to safety score
+        # Predict survivability score (with crime = 0, keeping other features)
+        survivability_features = [0.0, pop_density, road_density, visibility]
+        X_survivability = np.array([survivability_features])
+        X_survivability_scaled = self.scaler.transform(X_survivability)
+        survivability_risk = float(self.model.predict(X_survivability_scaled)[0])
+        survivability_risk = np.clip(survivability_risk, 0.0, 1.0)
+        
+        # Convert risks to safety scores
         safety_score = 100.0 * (1.0 - risk_score)
+        survivability_score = 100.0 * (1.0 - survivability_risk)
+        
+        # Crime score: impact on safety (how much crime reduces it)
+        crime_impact_score = survivability_score - safety_score
+        crime_impact_score = np.clip(crime_impact_score, 0.0, 100.0)
         
         # Handle timestamp for time-based adjustments
         if timestamp is None:
@@ -217,13 +236,26 @@ class BeeWareRiskModel:
         is_night = (hour >= 22 or hour < 6)
         is_rush_hour = (7 <= hour <= 10 or 18 <= hour <= 21)
         
-        # Minimal time adjustments (model already captures most patterns)
+        # Time-based adjustments
         if is_night:
-            safety_score *= 0.93  # Reduce by 7% at night
+            # Night (22:00-06:00): Reduce by 7% (less visibility, fewer people)
+            safety_score *= 0.93
+            survivability_score *= 0.93
         elif is_rush_hour:
-            safety_score *= 0.97  # Reduce by 3% during rush hour
+            # Rush hour (07:00-10:00, 18:00-21:00): INCREASE by 5% (crowded = safer)
+            # More people = more witnesses, more visibility, more help available
+            safety_score *= 1.05
+            survivability_score *= 1.05
         
         safety_score = np.clip(safety_score, 0.0, 100.0)
+        survivability_score = np.clip(survivability_score, 0.0, 100.0)
+        crime_impact_score = np.clip(crime_impact_score, 0.0, 100.0)
+        
+        # Apply POI boost to survivability (police stations and hospitals nearby)
+        if poi_boost > 0.0:
+            survivability_score = min(100.0, survivability_score + poi_boost)
+            # Also slightly boost safety score (but less than survivability)
+            safety_score = min(100.0, safety_score + poi_boost * 0.5)
         
         # Determine label and color
         if safety_score >= 70:
@@ -240,7 +272,6 @@ class BeeWareRiskModel:
             risk_class = 2
         
         # Calculate confidence
-        crime_score, pop_density, road_density, visibility = features
         extremity = max(
             abs(crime_score - 0.5) * 2,
             abs(visibility - 0.5) * 2,
@@ -273,6 +304,8 @@ class BeeWareRiskModel:
             "label": label,
             "color": color,
             "safety_score": float(safety_score),
+            "survivability_score": float(survivability_score),
+            "crime_impact_score": float(crime_impact_score),
             "confidence": confidence,
             "explanation": explanation,
             "crime_density": float(crime_score),
